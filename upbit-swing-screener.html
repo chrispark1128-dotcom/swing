@@ -146,27 +146,27 @@ const CONFIG = {
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web";
+$("#vtag").textContent=CONFIG.version+" · web·r2";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 
 /* ---------- throttled fetch (429 대비) ---------- */
 let _last=0;
-async function gj(url,retries=3,gap=130){
+async function gj(url,retries=6,gap=200){
   let err=null;
   for(let i=0;i<retries;i++){
     const wait=gap-(Date.now()-_last);
     if(wait>0) await sleep(wait);
     _last=Date.now();
     try{
-      const r=await fetch(url,{headers:{Accept:"application/json"}});
-      if(r.status===429){ await sleep(gap*(i+1)*2); continue; }
+      const r=await fetch(url,{headers:{Accept:"application/json"},cache:"no-store"});
+      if(r.status===429){ err=new Error("HTTP 429(요청 제한)"); await sleep(800*(i+1)); continue; }
       if(!r.ok) throw new Error("HTTP "+r.status);
       return await r.json();
-    }catch(e){ err=e; await sleep(gap*(i+1)); }
+    }catch(e){ err=e; await sleep(500*(i+1)); }
   }
-  throw new Error("GET fail "+url+": "+err);
+  throw new Error("GET fail "+url.slice(0,80)+"… — "+(err&&err.message||err));
 }
 
 /* ---------- 지표 ---------- */
@@ -200,7 +200,7 @@ async function universe(){ const d=await gj(`${UP}/market/all?isDetails=true`); 
     if(mk.startsWith("KRW-")){ const ev=m.market_event||{};
       o.push({market:mk,symbol:mk.slice(4),name:m.korean_name,warn:!!(ev&&ev.warning)}); } } return o; }
 async function tickers(mks){ const o={};
-  for(let i=0;i<mks.length;i+=100){ const q=encodeURIComponent(mks.slice(i,i+100).join(","));
+  for(let i=0;i<mks.length;i+=30){ const q=encodeURIComponent(mks.slice(i,i+30).join(","));
     for(const t of await gj(`${UP}/ticker?markets=${q}`))
       o[t.market]={price:t.trade_price,ch24:(t.signed_change_rate||0)*100,tv:t.acc_trade_price_24h||0}; }
   return o; }
