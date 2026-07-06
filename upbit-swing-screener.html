@@ -74,7 +74,6 @@
 
 <script>
 "use strict";
-const UP="https://api.upbit.com/v1";
 
 /* ══════════════════════════════════════════════════════════════════════
    ⚙️ CONFIG — 튜닝 손잡이. 정확도 개선은 여기 "숫자만" 바꾸면 됩니다.
@@ -85,6 +84,9 @@ const UP="https://api.upbit.com/v1";
      → ③수익 잘 가르는 요소 배점↑/못 가르는 요소↓ → version 올리고 ①로.
    ══════════════════════════════════════════════════════════════════════ */
 const CONFIG = {
+  // ▼ 업비트 요청이 "Failed to fetch"로 막히면(한국 IP rate limit) 아래를 본인 Cloudflare Worker 주소로 교체.
+  //   예: "https://swing-proxy.chrispark1128.workers.dev/v1"  (끝에 /v1 반드시 포함)
+  apiBase: "https://swing-proxy.chrispark1128.workers.dev/v1",
   version: "v7.0",       // ← 규칙 바꿀 때마다 올리기
   evalWindow: 21,        // 예측 유효기간(일). 이 안에 목표/손절 안 닿으면 만료 처리
 
@@ -143,10 +145,11 @@ const CONFIG = {
   },
   tier: { t1Th:1e11, t2Th:2e10 },  // 유동성 등급 경계(거래대금)
 };
+const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r2";
+$("#vtag").textContent=CONFIG.version+" · web·r4";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
