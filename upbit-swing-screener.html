@@ -1,0 +1,551 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1626">
+<title>📈 업비트 스윙 스크리너</title>
+<style>
+  :root{color-scheme:dark}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:#0b111f;color:#e8eaf0;
+       font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+       font-size:15px;line-height:1.55;padding:0 12px calc(40px + env(safe-area-inset-bottom))}
+  .wrap{max-width:720px;margin:0 auto}
+  header{position:sticky;top:0;z-index:10;background:#0b111fee;backdrop-filter:blur(8px);
+         padding:14px 0 10px;margin-bottom:6px;border-bottom:1px solid #1c2436}
+  h1{font-size:18px;margin:0 0 10px}
+  .row{display:flex;gap:8px;align-items:center}
+  button{font-family:inherit;border:0;border-radius:11px;font-weight:800;font-size:15px;
+         padding:13px 18px;cursor:pointer}
+  #run{flex:1;background:#F0B429;color:#241a00}
+  #run:disabled{opacity:.55}
+  select{font-family:inherit;background:#161d2e;color:#e8eaf0;border:1px solid #2a3350;
+         border-radius:10px;padding:12px 10px;font-size:14px}
+  #status{font-size:13px;color:#8a93ad;margin:10px 2px;min-height:18px}
+  .bar{height:5px;background:#161d2e;border-radius:4px;overflow:hidden;margin:4px 2px 0}
+  .bar>i{display:block;height:100%;width:0;background:#35C28B;transition:width .3s}
+  .meta{font-size:12.5px;color:#9aa3ba;background:#111827;border:1px solid #1c2436;
+        border-radius:10px;padding:10px 12px;margin:10px 0}
+  .card{background:#0f1626;border:1px solid #202942;border-radius:14px;padding:13px 14px;margin:11px 0}
+  .card h3{margin:0 0 8px;font-size:15.5px;display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+  .sym{font-weight:800}
+  .kname{color:#9aa3ba;font-size:13px;font-weight:500}
+  .sc{margin-left:auto;font-weight:900;font-size:16px;padding:2px 9px;border-radius:8px}
+  .g75{background:#123d2a;color:#5be6a5}.g60{background:#3d340f;color:#ffd257}
+  .g45{background:#232a3d;color:#c3ccdf}.g0{background:#3a1720;color:#ff8ba0}
+  .easy{background:#131c2e;border-left:3px solid #3a4870;
+        border-radius:8px;padding:8px 10px;margin:8px 0;font-size:13.5px}
+  .line{font-size:13px;color:#c7cddd;margin:5px 0}
+  .plan{background:#0c1322;border:1px dashed #2a3350;border-radius:9px;padding:9px 11px;margin:7px 0;font-size:13px}
+  .warn{color:#ffb454}
+  .copybox{background:#0f1626;border:1px solid #2a3350;border-radius:12px;padding:13px;margin:16px 0}
+  .copybox b{font-size:15px}
+  textarea{width:100%;height:150px;background:#161d2e;color:#e8eaf0;border:1px solid #2a3350;
+           border-radius:9px;padding:10px;font-family:ui-monospace,monospace;font-size:12px;
+           line-height:1.5;margin-top:8px;resize:vertical}
+  #copyBtn{background:#F0B429;color:#241a00;padding:12px 20px;width:100%;margin-top:8px}
+  .btn2{background:#1b2440;color:#cdd6ec;border:1px solid #2a3350;flex:1;font-size:13.5px;padding:11px 10px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin:8px 0}
+  th,td{border:1px solid #202942;padding:5px 6px;text-align:center}
+  th{background:#141c2e;color:#9aa3ba}
+  details{margin:12px 0;font-size:13.5px}
+  summary{cursor:pointer;color:#9aa3ba;padding:6px 0}
+  .disc{font-size:11.5px;color:#7b839a;margin:18px 2px;line-height:1.6}
+  a{color:#7fb0ff}
+  hr{border:0;border-top:1px solid #1c2436;margin:16px 0}
+  .sechd{font-size:15px;font-weight:800;margin:18px 2px 4px}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>📈 업비트 스윙 스크리너 <span id="vtag" style="color:#7b839a;font-size:12px">v7 · web</span></h1>
+  <div class="row">
+    <button id="run">실행 ▶</button>
+    <select id="n" title="후보 수">
+      <option value="15">15개</option>
+      <option value="25" selected>25개</option>
+      <option value="35">35개</option>
+    </select>
+  </div>
+  <div class="bar"><i id="pbar"></i></div>
+  <div id="status">폰 브라우저에서 바로 실행됩니다. [실행]을 누르세요.</div>
+</header>
+
+<div id="out"></div>
+</div>
+
+<script>
+"use strict";
+const UP="https://api.upbit.com/v1";
+
+/* ══════════════════════════════════════════════════════════════════════
+   ⚙️ CONFIG — 튜닝 손잡이. 정확도 개선은 여기 "숫자만" 바꾸면 됩니다.
+   ──────────────────────────────────────────────────────────────────────
+   ★ 규칙(배점/기준)을 바꿀 때는 반드시 version을 올리세요 (예 "v7.0"→"v7.1").
+     그래야 자기검증 성과표가 "새 규칙 기준"으로만 다시 집계됩니다.
+   ★ 개선 순서: ①매일 돌려 데이터 쌓기 → ②성과표·팩터진단 읽기
+     → ③수익 잘 가르는 요소 배점↑/못 가르는 요소↓ → version 올리고 ①로.
+   ══════════════════════════════════════════════════════════════════════ */
+const CONFIG = {
+  version: "v7.0",       // ← 규칙 바꿀 때마다 올리기
+  evalWindow: 21,        // 예측 유효기간(일). 이 안에 목표/손절 안 닿으면 만료 처리
+
+  ind: {                 // 지표 기간
+    emaFast:20, emaSlow:50, smaLong:200, rsi:14,
+    macdFast:12, macdSlow:26, macdSig:9, atr:14,
+    resWin:30, res90Win:90, volAvgWin:20,
+  },
+  trend: {               // 추세 배점
+    aboveEmaFast:10,       // 현재가 > 20일선
+    emaFastOverSlow:10,    // 20일선 > 50일선
+    aboveSma:10,           // 현재가 > 200일선
+    aboveEmaSlowIfNoSma:5, // 200일선 데이터 없으면 대체(현재가>50일선)
+  },
+  momentum: {            // 모멘텀 배점
+    rsiSweetLo:45, rsiSweetHi:65, rsiSweetPts:12,  // RSI 45~65 = 이상적
+    rsiOkLo:40, rsiOkHi:70, rsiOkPts:7,            // 40~45 또는 65~70 = 무난
+    rsiHotTh:78, rsiHotPts:-5,                     // 78 초과 = 과열 감점
+    macdUpPts:8,                                   // MACD 골든
+  },
+  volume: {              // 거래량 배점(20일 평균 대비 배수)
+    strongTh:1.2, strongPts:10,
+    okTh:0.9, okPts:5,
+  },
+  setup: {               // 자리(셋업) 배점
+    posLowTh:0.35, posLowPts:8,   // 지지~저항 사이 위치가 낮을수록 좋음
+    posMidTh:0.6,  posMidPts:4,
+    hrFarTh:15, hrFarPts:7,       // 위 저항까지 여유(%)
+    hrMidTh:10, hrMidPts:4,
+    hrNearTh:6, hrNearPts:-3,     // 저항 코앞이면 감점
+  },
+  relStr: {              // 상대강도(BTC 7일 대비)
+    beatPts:6, bigGapTh:5, bigGapPts:10,
+  },
+  penalty: {             // 감점 규칙(값은 음수)
+    pumpHardTh:25, pumpHardPts:-12,   // 이미 급등
+    pumpSoftTh:15, pumpSoftPts:-6,
+    pumpNoVolTh:10, pumpNoVolRatio:0.9, pumpNoVolPts:-8,  // 올랐는데 거래량 없음
+    rsiOverboughtTh:75, rsiOverboughtPts:-6,
+    resTooCloseTh:6, resTooClosePts:-6,  // 저항까지 6%뿐
+    belowWeeklyPts:-6,                   // 주봉 아래(역추세)
+    noisyStopAtr:1.2, noisyStopFrac:0.05, noisyStopPts:-5,  // 스탑 노이즈 위험
+    riskoffPts:-5,                       // BTC<50일선 국면
+  },
+  plan: {                // 진입/손절/목표
+    t1:1.10, t2:1.20,        // 목표가 배수(+10%·+20%)
+    atrEntryLow:1.0,         // 진입존 하단 = max(지지, 현재가 - N×ATR)
+    supBuffer:0.5, atrStop:1.8,  // 원손절 후보 = min(지지-0.5×ATR, 현재가-1.8×ATR)
+  },
+  select: {              // 후보 선정
+    minTradeValue24h:5e8,   // 최소 24h 거래대금(원)
+    minAbsChange:0.3,       // |24h 등락|이 이 미만이면 제외
+    quietMaxChange:3.0,     // |등락|이 이 이하면 '조용한' 후보로도 편입
+    momentumWeight:0.6,     // 모멘텀 정렬 = 0.6×등락 + 유동성
+    momShareNum:3, momShareDen:5,  // 후보의 3/5는 모멘텀, 나머지는 조용한 종목
+  },
+  tier: { t1Th:1e11, t2Th:2e10 },  // 유동성 등급 경계(거래대금)
+};
+
+const $=(s)=>document.querySelector(s);
+const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
+$("#vtag").textContent=CONFIG.version+" · web";
+function setStatus(t){statusEl.textContent=t}
+function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+
+/* ---------- throttled fetch (429 대비) ---------- */
+let _last=0;
+async function gj(url,retries=3,gap=130){
+  let err=null;
+  for(let i=0;i<retries;i++){
+    const wait=gap-(Date.now()-_last);
+    if(wait>0) await sleep(wait);
+    _last=Date.now();
+    try{
+      const r=await fetch(url,{headers:{Accept:"application/json"}});
+      if(r.status===429){ await sleep(gap*(i+1)*2); continue; }
+      if(!r.ok) throw new Error("HTTP "+r.status);
+      return await r.json();
+    }catch(e){ err=e; await sleep(gap*(i+1)); }
+  }
+  throw new Error("GET fail "+url+": "+err);
+}
+
+/* ---------- 지표 ---------- */
+function ema(v,p){ if(v.length<p) return v.map(()=>null);
+  const o=v.map(()=>null); const k=2/(p+1); let s=0;
+  for(let i=0;i<p;i++) s+=v[i]; s/=p; o[p-1]=s; let pr=s;
+  for(let i=p;i<v.length;i++){ pr=v[i]*k+pr*(1-k); o[i]=pr; } return o; }
+function sma(v,p){ const o=v.map(()=>null); let r=0;
+  for(let i=0;i<v.length;i++){ r+=v[i]; if(i>=p) r-=v[i-p]; if(i>=p-1) o[i]=r/p; } return o; }
+function rsi(v,p=14){ const o=v.map(()=>null); if(v.length<=p) return o;
+  let g=0,l=0; for(let i=1;i<=p;i++){ const d=v[i]-v[i-1]; g+=Math.max(d,0); l+=Math.max(-d,0); }
+  let ag=g/p, al=l/p; o[p]= al? 100-100/(1+ag/al):100;
+  for(let i=p+1;i<v.length;i++){ const d=v[i]-v[i-1];
+    ag=(ag*(p-1)+Math.max(d,0))/p; al=(al*(p-1)+Math.max(-d,0))/p;
+    o[i]= al? 100-100/(1+ag/al):100; } return o; }
+function macd(v,f=12,s=26,sig=9){ const ef=ema(v,f), es=ema(v,s); const m=v.map(()=>null);
+  for(let i=0;i<v.length;i++) if(ef[i]!=null&&es[i]!=null) m[i]=ef[i]-es[i];
+  const val=[]; m.forEach((x,i)=>{ if(x!=null) val.push([i,x]); }); const sg=v.map(()=>null);
+  if(val.length>=sig){ const seq=val.map(x=>x[1]); const e=ema(seq,sig);
+    val.forEach((pair,idx)=>{ sg[pair[0]]=e[idx]; }); } return [m,sg]; }
+function atr(h,l,c,p=14){ const n=c.length; const tr=new Array(n).fill(0);
+  for(let i=0;i<n;i++) tr[i]= i===0? h[i]-l[i]: Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1]));
+  if(n<=p) return null; let a=0; for(let i=1;i<=p;i++) a+=tr[i]; a/=p;
+  for(let i=p+1;i<n;i++) a=(a*(p-1)+tr[i])/p; return a; }
+function last(x){ for(let i=x.length-1;i>=0;i--) if(x[i]!=null) return x[i]; return null; }
+const mx=(a)=>Math.max.apply(null,a), mn=(a)=>Math.min.apply(null,a);
+
+/* ---------- 업비트 데이터 ---------- */
+async function universe(){ const d=await gj(`${UP}/market/all?isDetails=true`); const o=[];
+  for(const m of d){ const mk=m.market||"";
+    if(mk.startsWith("KRW-")){ const ev=m.market_event||{};
+      o.push({market:mk,symbol:mk.slice(4),name:m.korean_name,warn:!!(ev&&ev.warning)}); } } return o; }
+async function tickers(mks){ const o={};
+  for(let i=0;i<mks.length;i+=100){ const q=encodeURIComponent(mks.slice(i,i+100).join(","));
+    for(const t of await gj(`${UP}/ticker?markets=${q}`))
+      o[t.market]={price:t.trade_price,ch24:(t.signed_change_rate||0)*100,tv:t.acc_trade_price_24h||0}; }
+  return o; }
+async function daily(mk,cnt=200){ const d=(await gj(`${UP}/candles/days?market=${mk}&count=${Math.min(cnt,200)}`)).reverse();
+  return [d.map(c=>c.high_price),d.map(c=>c.low_price),d.map(c=>c.trade_price),d.map(c=>c.candle_acc_trade_volume)]; }
+
+/* 자기검증용: 날짜 포함 캔들 (캐시) */
+const _candCache={};
+async function candDates(mk){ if(!_candCache[mk]){ const d=(await gj(`${UP}/candles/days?market=${mk}&count=200`)).reverse();
+  _candCache[mk]=[d.map(c=>c.candle_date_time_utc.slice(0,10)),d.map(c=>c.high_price),d.map(c=>c.low_price),d.map(c=>c.trade_price)]; }
+  return _candCache[mk]; }
+
+/* ---------- 리스크 티어 ---------- */
+function tier(tv,warn){ if(warn) return["🔴 T3","⚠️유의종목"];
+  if(tv>=CONFIG.tier.t1Th) return["🟢 T1","고유동성"];
+  if(tv>=CONFIG.tier.t2Th) return["🟡 T2","중유동성"]; return["🔴 T3","저유동성"]; }
+
+/* ---------- 분석 ---------- */
+function analyze(h,l,c,vol,elapsed=1.0){
+  const I=CONFIG.ind;
+  if(c.length<62) return null;
+  const hc=h.slice(0,-1),lc=l.slice(0,-1),cc=c.slice(0,-1),vc=vol.slice(0,-1);
+  const price=c[c.length-1];
+  const e20=last(ema(cc,I.emaFast)),e50=last(ema(cc,I.emaSlow));
+  const s200= cc.length>=I.smaLong? last(sma(cc,I.smaLong)):null;
+  const r=last(rsi(cc,I.rsi)); const [m,sg]=macd(cc,I.macdFast,I.macdSlow,I.macdSig); const ml=last(m),sl=last(sg);
+  const a=atr(hc,lc,cc,I.atr)||price*0.05;
+  const res30=mx(hc.slice(-I.resWin)), sup=mn(lc.slice(-I.resWin));
+  const res90= hc.length>=I.res90Win? mx(hc.slice(-I.res90Win)):res30;
+  const va= vc.length>=I.volAvgWin? vc.slice(-I.volAvgWin).reduce((x,y)=>x+y,0)/I.volAvgWin : 1;
+  const vol_pace=vol[vol.length-1]/Math.max(elapsed,0.08);
+  let wcl=[],i=cc.length; while(i>0&&wcl.length<12){ wcl.push(cc[i-1]); i-=7; }
+  const w10= wcl.length>=10? wcl.slice(0,10).reduce((x,y)=>x+y,0)/10 : null;
+  return {p:price,e20,e50,s200,rsi:r,macd:ml,sig:sl,atr:a,res:res30,res90,sup,
+    vr: va? vol_pace/va : null,
+    c7: cc.length>=7? (price/cc[cc.length-7]-1)*100 : null,
+    c30: cc.length>=30? (price/cc[cc.length-30]-1)*100 : null, w10}; }
+
+function headroom(a){ if(!a.res) return[null,null]; const p=a.p;
+  if(p<a.res*0.995) return[(a.res-p)/p*100,"30일 저항"];
+  if(a.res90>p*1.005) return[(a.res90-p)/p*100,"90일 매물대"]; return[99.0,null]; }
+
+function score(a,btc7,riskoff){ const C=CONFIG; const s={}; const p=a.p;
+  let t=0;
+  if(a.e20&&p>a.e20) t+=C.trend.aboveEmaFast;
+  if(a.e20&&a.e50&&a.e20>a.e50) t+=C.trend.emaFastOverSlow;
+  if(a.s200&&p>a.s200) t+=C.trend.aboveSma;
+  else if(a.s200==null&&a.e50&&p>a.e50) t+=C.trend.aboveEmaSlowIfNoSma;
+  s["추세"]=t;
+  let mo=0; const r=a.rsi; const M=C.momentum;
+  if(r!=null){ if(r>=M.rsiSweetLo&&r<=M.rsiSweetHi) mo+=M.rsiSweetPts;
+    else if((r>=M.rsiOkLo&&r<M.rsiSweetLo)||(r>M.rsiSweetHi&&r<=M.rsiOkHi)) mo+=M.rsiOkPts;
+    else if(r>M.rsiHotTh) mo+=M.rsiHotPts; }
+  if(a.macd!=null&&a.sig!=null&&a.macd>a.sig) mo+=M.macdUpPts; s["모멘텀"]=Math.max(mo,0);
+  let v=0; const V=C.volume;
+  if(a.vr&&a.vr>=V.strongTh) v+=V.strongPts; else if(a.vr&&a.vr>=V.okTh) v+=V.okPts; s["거래량"]=v;
+  let su=0; const S=C.setup;
+  if(a.sup&&a.res&&a.res>a.sup){ const pos=(p-a.sup)/(a.res-a.sup); su+= pos<=S.posLowTh?S.posLowPts:(pos<=S.posMidTh?S.posMidPts:0); }
+  let [hr]=headroom(a);
+  if(hr!=null) su+= hr>=S.hrFarTh?S.hrFarPts:(hr>=S.hrMidTh?S.hrMidPts:(hr<S.hrNearTh?S.hrNearPts:0)); s["셋업"]=Math.max(su,0);
+  let rs=0; const R=C.relStr;
+  if(a.c7!=null&&btc7!=null&&a.c7>btc7) rs+= (a.c7-btc7>R.bigGapTh)?R.bigGapPts:R.beatPts; s["상대강도"]=rs;
+  let base=Object.values(s).reduce((x,y)=>x+y,0);
+  let pen=0; const P=C.penalty; const c7=a.c7,vr=a.vr,r2=a.rsi;
+  if(c7!=null){ if(c7>P.pumpHardTh) pen+=P.pumpHardPts; else if(c7>P.pumpSoftTh) pen+=P.pumpSoftPts; }
+  if(c7!=null&&c7>P.pumpNoVolTh&&(vr==null||vr<P.pumpNoVolRatio)) pen+=P.pumpNoVolPts;
+  if(r2!=null&&r2>P.rsiOverboughtTh) pen+=P.rsiOverboughtPts;
+  if(hr!=null&&hr<P.resTooCloseTh) pen+=P.resTooClosePts;
+  if(a.w10&&p<a.w10) pen+=P.belowWeeklyPts;
+  if(P.noisyStopAtr*a.atr>P.noisyStopFrac*p) pen+=P.noisyStopPts;
+  if(riskoff) pen+=P.riskoffPts;
+  s["감점"]=pen;
+  return [Math.max(0,Math.min(100,Math.round(base+pen))),s]; }
+
+function verdict(sc){ if(sc>=75) return"🟢 강한 진입"; if(sc>=60) return"🟡 조건부 관심";
+  if(sc>=45) return"⚪ 관망"; return"⛔ 제외"; }
+
+function plainSummary(sc,bd,a,pl){ const p=[]; const c7=a.c7;
+  if(c7!=null&&c7>15) p.push(`이미 ${c7.toFixed(0)}% 올라 뒤늦은 자리`);
+  else if(c7!=null&&c7<-5) p.push(`최근 ${Math.abs(c7).toFixed(0)}% 빠져 반등 초입일 수 있음`);
+  if((bd["거래량"]||0)===0) p.push("살 사람이 안 붙음(거래량 약함)");
+  else if((bd["거래량"]||0)>=15) p.push("돈이 몰리는 중(거래량 강함)");
+  if(a.w10&&a.p<a.w10) p.push("큰 흐름은 아직 아래쪽(주봉 하락)");
+  if((bd["감점"]||0)<=-10) p.push("위험요소가 겹쳐 감점 큼");
+  const [hr]=headroom(a);
+  if(hr!=null&&hr<6) p.push("바로 위에 저항이 있어 목표 도달 전 막힐 수 있음");
+  if(1.2*a.atr>(a.p-pl.stop)) p.push("손절선이 빡빡해 억울하게 잘릴 위험");
+  if(!p.length){ if(sc>=75) p.push("추세·거래량·자리 모두 양호");
+    else if(sc>=60) p.push("대체로 괜찮으나 확신은 부족");
+    else p.push("나쁘진 않지만 지금 들어갈 만한 강한 이유는 없음"); }
+  const head= sc>=75?"지금 진입 매력 큼":(sc>=60?"조건부로 관심":(sc>=45?"일단 지켜볼 자리":"지금은 피할 자리"));
+  return head+" — "+p.slice(0,3).join(", "); }
+
+function rsiWord(r){ if(r==null) return"-";
+  if(r>=78) return`${r.toFixed(0)}(과열, 추격 위험)`; if(r>=70) return`${r.toFixed(0)}(다소 과열)`;
+  if(r>=45) return`${r.toFixed(0)}(무난한 중간 구간)`; if(r>=30) return`${r.toFixed(0)}(약세)`;
+  return`${r.toFixed(0)}(침체, 낙폭과대)`; }
+
+function plan(a){ const P=CONFIG.plan; const p=a.p, atr_=a.atr; const sup=a.sup||(p-2*atr_);
+  const t1=p*P.t1,t2=p*P.t2; const rs=Math.min(sup-P.supBuffer*atr_,p-P.atrStop*atr_);
+  const m=(t1-p)/2; const stop=(p-rs)>m? p-m : rs;
+  const risk=p-stop; const rr1= risk>0? Math.round((t1-p)/risk*100)/100 : null;
+  const rr2= risk>0? Math.round((t2-p)/risk*100)/100 : null;
+  let [hr,hsrc]=headroom(a); let hn;
+  if(hr&&hr>=99) hn="신고가권(90일 내 매물대 없음)";
+  else if(hr&&hr<10) hn=`⚠️ ${hsrc}까지 ${hr.toFixed(1)}%뿐`;
+  else if(hr) hn=`${hsrc}까지 여유 ${hr.toFixed(1)}%`; else hn="";
+  if(1.2*atr_>risk) hn+=" · ⚠️ 스탑<1.2×ATR 노이즈 위험(사이즈 축소)";
+  return {elo:Math.max(sup,p-P.atrEntryLow*atr_),ehi:p,stop,sp:(stop/p-1)*100,t1,t2,rr1,rr2,hn}; }
+
+function won(x){ if(x==null) return"-";
+  if(x>=100) return Math.round(x).toLocaleString()+"원";
+  if(x>=1) return x.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+"원";
+  return x.toFixed(4)+"원"; }
+
+/* ---------- 자기검증 로그 (localStorage) ---------- */
+const LOG_KEY="swing_prediction_log";
+function loadLog(){ let log; try{ log=JSON.parse(localStorage.getItem(LOG_KEY)||"[]"); }catch(e){ return []; }
+  if(!Array.isArray(log)) return [];
+  // 버전 태그 없는 옛 예측(=v7.0 규칙으로 만들어짐)에 소급 태그 부여
+  let mig=false; for(const e of log){ if(e&&!e.cfgVersion){ e.cfgVersion="v7.0"; mig=true; } }
+  if(mig) saveLog(log);
+  return log; }
+function saveLog(log){ try{ localStorage.setItem(LOG_KEY,JSON.stringify(log)); }catch(e){} }
+function todayUTC(){ return new Date().toISOString().slice(0,10); }
+
+function appendPredictions(log,rows,today){
+  const have=new Set(log.map(e=>e.date+"|"+e.symbol));
+  for(const [sc,bd,a,pl,u] of rows){
+    if(have.has(today+"|"+u.symbol)) continue;
+    log.push({date:today,symbol:u.symbol,name:u.name,market:"KRW-"+u.symbol,
+      cfgVersion:CONFIG.version,
+      score:sc,verdict:verdict(sc),bd:Object.assign({},bd),
+      price:a.p,stop:pl.stop,t1:pl.t1,t2:pl.t2,status:"pending"}); }
+  return log; }
+
+async function evaluateLog(log,window=CONFIG.evalWindow){ let changed=0; const today=new Date();
+  for(const e of log){
+    if(e.status!=="pending") continue;
+    const d0=new Date(e.date+"T00:00:00Z");
+    const age=Math.floor((today-d0)/86400000);
+    if(age<1) continue;
+    let ds,h,l,c;
+    try{ [ds,h,l,c]=await candDates(e.market); }catch(err){ continue; }
+    const end=new Date(d0.getTime()+window*86400000).toISOString().slice(0,10);
+    let hit=null,lastClose=null;
+    for(let i=0;i<ds.length;i++){ const dstr=ds[i];
+      if(dstr<=e.date||dstr>end) continue; lastClose=c[i];
+      if(hit==null&&l[i]<=e.stop){ hit="stop"; break; }
+      if(h[i]>=e.t2){ hit="t2"; break; }
+      if(hit==null&&h[i]>=e.t1) hit="t1"; }
+    const over=age>=window;
+    if(hit==="stop"){ e.status="stop"; e.ret=e.stop/e.price-1; }
+    else if(hit==="t2"){ e.status="t2"; e.ret=0.20; }
+    else if(hit==="t1"&&over){ e.status="t1"; e.ret=0.10; }
+    else if(hit==null&&over){ e.status="expire"; e.ret= lastClose? lastClose/e.price-1 : 0; }
+    else continue;
+    changed++; }
+  return changed; }
+
+function perfStats(log){
+  const curV=CONFIG.version;
+  const GRADES=[["🟢75+",75,101],["🟡60~74",60,75],["⚪45~59",45,60],["⛔<45",-1,45]];
+  const done=(e)=>["stop","t1","t2","expire"].includes(e.status);
+  const evAll=log.filter(done);
+  const ev=evAll.filter(e=>(e.cfgVersion||"이전")===curV);      // 현재 규칙으로 낸 예측만
+  const otherV=evAll.length-ev.length;
+  const pends=log.filter(e=>e.status==="pending"&&(e.cfgVersion||"이전")===curV);
+  const pend=pends.length;
+  const gl=(sc)=>{ for(const[lab,lo,hi]of GRADES) if(sc>=lo&&sc<hi) return lab; return"?"; };
+  const pdist={}; for(const e of pends) pdist[gl(e.score)]=(pdist[gl(e.score)]||0)+1;
+  const pdistStr=GRADES.map(([lab])=>`${lab} ${pdist[lab]||0}`).join(" · ");
+  const vnote= otherV? ` · 다른 규칙버전 예측 ${otherV}건은 제외됨` : "";
+  let h=`<div class="sechd">📊 자기검증 <span style="color:#7b839a;font-size:12px;font-weight:400">(규칙 ${curV})</span></div>`;
+  if(!ev.length){ h+=`<div class="meta">현재 규칙(${curV})으로 평가 완료된 예측 없음 (대기 ${pend}건 · 예측 1일 후부터 자동 평가)${vnote}<br>대기 등급 분포: ${pdistStr}</div>`; return h; }
+  h+=`<div class="meta">평가 ${ev.length}건 · 대기 ${pend}건${vnote}</div>`;
+  h+=`<table><tr><th>등급</th><th>n</th><th>T1</th><th>T2</th><th>스탑</th><th>만료</th><th>평균</th></tr>`;
+  let small=true;
+  for(const[label,lo,hi]of GRADES){ const g=ev.filter(e=>e.score>=lo&&e.score<hi); if(!g.length) continue;
+    const n=g.length; if(n>=10) small=false;
+    const t1=g.filter(e=>["t1","t2"].includes(e.status)).length, t2=g.filter(e=>e.status==="t2").length;
+    const st=g.filter(e=>e.status==="stop").length, ex=g.filter(e=>e.status==="expire").length;
+    const ar=g.reduce((x,e)=>x+(e.ret||0),0)/n*100;
+    const flag=n<10?" ⚠️":"";
+    h+=`<tr><td>${label}</td><td>${n}${flag}</td><td>${(t1/n*100).toFixed(0)}%</td><td>${(t2/n*100).toFixed(0)}%</td><td>${(st/n*100).toFixed(0)}%</td><td>${(ex/n*100).toFixed(0)}%</td><td>${ar>=0?"+":""}${ar.toFixed(1)}%</td></tr>`; }
+  h+=`</table><div class="meta">대기 등급 분포: ${pdistStr}</div>`;
+  // 팩터 진단
+  const diag=[];
+  for(const[k,thr]of [["거래량",10],["셋업",8],["추세",30],["상대강도",6]]){
+    const hi=ev.filter(e=>(e.bd?.[k]||0)>=thr), lo=ev.filter(e=>(e.bd?.[k]||0)<thr);
+    if(hi.length&&lo.length){ const ah=hi.reduce((x,e)=>x+(e.ret||0),0)/hi.length*100, al=lo.reduce((x,e)=>x+(e.ret||0),0)/lo.length*100;
+      diag.push(`${k}≥${thr}: ${ah>=0?"+":""}${ah.toFixed(1)}% vs 미만 ${al>=0?"+":""}${al.toFixed(1)}%`); } }
+  h+=`<div class="meta"><b>팩터 진단(평균수익):</b> ${diag.length?diag.join(" · "):"표본 부족"}</div>`;
+  const upper=ev.filter(e=>e.score>=60);
+  if(small||upper.length<10)
+    h+=`<div class="meta warn">🚧 튜닝 보류 권고: 표본 부족(🟢🟡 상위등급 평가 ${upper.length}건). 각 등급 n≥10 + 21일 창이 여러 번 완주해야 통계 유효. 지금 CONFIG 가중치 바꾸면 과적합 위험 — 데이터 쌓일 때까지 관찰만.</div>`;
+  else h+=`<div class="meta">🟢 등급이 아래 등급보다 T1 적중률·평균수익이 높아야 점수 체계 유효. 이 표를 클로드에 붙여 CONFIG 튜닝 제안 요청 가능.</div>`;
+  return h; }
+
+/* ---------- 메인 빌드 ---------- */
+async function build(shortlist){
+  const SEL=CONFIG.select;
+  setStatus("종목 목록 불러오는 중…"); setProg(0.03);
+  const uni=await universe();
+  setStatus("현재가·거래대금 불러오는 중…"); setProg(0.08);
+  const tk=await tickers(uni.map(u=>u.market));
+  const now=new Date();
+  const elapsed=(now.getUTCHours()*3600+now.getUTCMinutes()*60+now.getUTCSeconds())/86400;
+  setStatus("BTC 국면 분석 중…"); setProg(0.12);
+  const btc=await daily("KRW-BTC",200); const btcCc=btc[2].slice(0,-1);
+  const btc7= btcCc.length>=7? (btc[2][btc[2].length-1]/btcCc[btcCc.length-7]-1)*100 : null;
+  const btcE50=last(ema(btcCc,CONFIG.ind.emaSlow));
+  const riskoff=!!(btcE50&&btc[2][btc[2].length-1]<btcE50);
+  const mom=[],quiet=[];
+  for(const u of uni){ const t=tk[u.market]; if(!t||(t.tv||0)<SEL.minTradeValue24h) continue;
+    const liq=3*Math.max(Math.log10(t.tv+1)-8,0); const pen=u.warn?8:0; const ch=t.ch24;
+    if(Math.abs(ch)<SEL.minAbsChange) continue;
+    mom.push([SEL.momentumWeight*ch+liq-pen,u,t]); if(Math.abs(ch)<=SEL.quietMaxChange) quiet.push([liq-pen,u,t]); }
+  mom.sort((a,b)=>b[0]-a[0]); quiet.sort((a,b)=>b[0]-a[0]);
+  const nMom=Math.max(Math.floor(shortlist*SEL.momShareNum/SEL.momShareDen),1); const picked=new Map();
+  for(const[,u,t]of mom.slice(0,nMom)) picked.set(u.market,[u,t]);
+  for(const[,u,t]of quiet){ if(picked.size>=shortlist) break; if(!picked.has(u.market)) picked.set(u.market,[u,t]); }
+  for(const[,u,t]of mom.slice(nMom)){ if(picked.size>=shortlist) break; if(!picked.has(u.market)) picked.set(u.market,[u,t]); }
+
+  const rows=[],skipped=[]; const list=[...picked.values()]; let cnt=0;
+  for(const[u,t]of list){ cnt++;
+    setStatus(`분석 중 ${cnt}/${list.length} — ${u.symbol}`); setProg(0.15+0.7*cnt/list.length);
+    let h,l,c,v; try{ [h,l,c,v]=await daily(u.market,200); }catch(e){ skipped.push(u.symbol); continue; }
+    const a=analyze(h,l,c,v,elapsed); if(!a){ skipped.push(u.symbol); continue; }
+    const [sc,bd]=score(a,btc7,riskoff); const pl=plan(a); const [tr,tn]=tier(t.tv,u.warn);
+    rows.push([sc,bd,a,pl,u,tr,tn]); }
+  rows.sort((a,b)=>b[0]-a[0]);
+  return {rows,skipped,btc7,riskoff,now}; }
+
+/* ---------- 렌더링 ---------- */
+function gcls(sc){ return sc>=75?"g75":(sc>=60?"g60":(sc>=45?"g45":"g0")); }
+function esc(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+function render(res,log,nEval){
+  const {rows,skipped,btc7,riskoff,now}=res;
+  const nows=now.toISOString().slice(0,16).replace("T"," ")+" UTC";
+  let h=`<div class="meta">업비트 스윙 후보 — ${nows} · 규칙 ${CONFIG.version}<br>
+    KRW 상장만 · 목표 +10~20% · 완성 일봉 기준(오늘 캔들 제외)<br>
+    BTC 7일 ${btc7==null?"-":(btc7>=0?"+":"")+btc7.toFixed(1)+"%"} · 국면: ${riskoff?"⚠️ 리스크오프(BTC<50일선, 전 후보 -5)":"리스크온(BTC>50일선)"}</div>`;
+  h+=`<div class="meta">점수만 보면 됨: 🟢75+ 강한 진입 · 🟡60~74 조건부 · ⚪45~59 관망 · ⛔45미만 제외. 급등추격·거래량부재·저항코앞·주봉역추세 등 자동 감점.</div>`;
+
+  if(!rows.length) h+=`<div class="card">통과 후보 없음.</div>`;
+  rows.forEach(([sc,bd,a,pl,u,tr,tn],idx)=>{
+    const mm=(a.macd!=null&&a.sig!=null&&a.macd>a.sig)?"▲골든(단기 상승신호)":"▽데드(단기 하락신호)";
+    const pentxt=bd["감점"]?` · 감점 ${bd["감점"]}`:"";
+    const wk=(a.w10&&a.p>=a.w10)?"위쪽(장기 흐름 양호)":"⚠️아래쪽(장기 하락 중)";
+    h+=`<div class="card">
+      <h3><span class="sym">${idx+1}. ${esc(u.symbol)}</span> <span class="kname">${esc(u.name||"")}</span>
+        <span class="sc ${gcls(sc)}">${sc} ${verdict(sc)}</span></h3>
+      <div class="easy">💬 ${esc(plainSummary(sc,bd,a,pl))}</div>`;
+    if(a.rsi!=null){
+      h+=`<div class="line">${tr} ${tn} · 추세${bd["추세"]}/모멘텀${bd["모멘텀"]}/거래량${bd["거래량"]}/셋업${bd["셋업"]}/상대강도${bd["상대강도"]}${pentxt}</div>
+        <div class="line">현재가 ${won(a.p)} · RSI ${rsiWord(a.rsi)} · MACD ${mm} · 거래량 ${a.vr!=null?a.vr.toFixed(2)+"배(20일 평균 대비)":"-"}</div>`;
+    } else h+=`<div class="line">${tr} ${tn}</div>`;
+    h+=`<div class="line">최근 7일 ${a.c7>=0?"+":""}${a.c7.toFixed(1)}% / 30일 ${a.c30>=0?"+":""}${a.c30.toFixed(1)}% · 큰 흐름(주봉): ${wk}</div>
+      <div class="plan">📋 <b>플랜:</b> ${won(pl.elo)}~${won(pl.ehi)}에 사서 → <b>${won(pl.stop)}(${pl.sp>=0?"+":""}${pl.sp.toFixed(1)}%)</b> 밑돌면 손절 → ${won(pl.t1)}(+10%)·${won(pl.t2)}(+20%) 익절<br>
+        · RR(손익비) ${pl.rr1} (2 이상이면 유리)<br>
+        · ${esc(pl.hn)}</div></div>`;
+  });
+  if(skipped.length) h+=`<div class="meta">데이터 부족/신규상장 제외: ${skipped.join(", ")}</div>`;
+
+  h+=perfStats(log);
+  h+=`<div class="meta">이번 실행 평가 ${nEval}건 · 누적 기록 ${log.length}건 (이 폰에 저장)</div>`;
+
+  /* 복사 요약 */
+  const svW=(sc)=>sc>=75?"강":(sc>=60?"관심":(sc>=45?"관망":"제외"));
+  const c7f=(x)=>x.c7!=null?`${x.c7>=0?"+":""}${x.c7.toFixed(0)}%`:"-";
+  const names=rows.filter(x=>x[4].name).map(x=>`${x[4].symbol}=${x[4].name}`).join(", ");
+  const syms=rows.map(x=>x[4].symbol).join(", ");
+  const detail=rows.map(x=>`${x[4].symbol}(${x[0]}${svW(x[0])},7d${c7f(x[2])})`).join(" · ");
+  const copytext=`[심볼] ${syms}\n[종목명] ${names}\n[상세] ${detail}\n→ 업비트 스윙 후보야(숫자=총점, 높을수록 진입매력). 각 종목 글로벌 동향·촉매·악재 조사해서 진입해도 될지 판단 도와줘.`;
+  h+=`<div class="copybox"><b>📋 클로드에 넘길 요약</b>
+    <textarea id="cpb" readonly>${esc(copytext)}</textarea>
+    <button id="copyBtn">복사</button>
+    <div class="disc" style="margin:8px 2px 0">복사 → 클로드에 붙여넣기. 성과 표가 쌓이면 그것도 함께 붙여 CONFIG 튜닝 요청.</div></div>`;
+
+  /* 로그 백업 */
+  h+=`<div class="copybox"><b>💾 로그 백업</b>
+    <div class="disc" style="margin:6px 2px 0">예측 기록은 이 폰에만 저장됩니다. 내보내서 백업하거나, 새 폰/PC에서 불러오세요. (파일을 클로드에 첨부하면 심층 분석도 가능)</div>
+    <div class="row" style="margin-top:10px">
+      <button id="expBtn" class="btn2">내보내기(JSON)</button>
+      <button id="impBtn" class="btn2">불러오기</button>
+      <input id="impFile" type="file" accept="application/json,.json" style="display:none">
+    </div></div>`;
+
+  h+=`<details><summary>📖 용어 설명 (처음이면 펼쳐보세요)</summary>
+    <div class="line">• <b>점수(0~100)</b>: 높을수록 지금 사기 좋은 자리. 75+ 강함 / 60~74 조건부 / 45~59 관망 / 45미만 피함.<br>
+    • <b>RSI</b>: 상승·하락 힘의 균형(0~100). 50 근처 무난, 70↑ 과열, 30↓ 침체.<br>
+    • <b>MACD 골든/데드</b>: 단기 추세가 위로(골든)/아래로(데드) 도는 신호.<br>
+    • <b>거래량 N배</b>: 20일 평균 대비 오늘 몰린 돈. 1.2배↑면 관심 붙는 중.<br>
+    • <b>주봉 위/아래</b>: 주 단위 큰 흐름. 아래쪽이면 반등이어도 역추세라 위험.<br>
+    • <b>진입존/스탑/목표</b>: 살 가격대 / 손절 / 익절(+10%·+20%).<br>
+    • <b>RR(손익비)</b>: 잃을 위험 대비 노리는 수익. 높을수록 유리.<br>
+    • <b>저항/매물대</b>: 위에서 팔 사람 많아 잘 못 뚫는 가격대.<br>
+    • <b>감점</b>: 급등·거래량없음·손절빡빡·장기하락 등 위험요소 차감.<br>
+    • <b>T1/T2/T3</b>: 코인 규모(유동성) 등급. T3=작은 코인(급변 위험 큼).</div></details>`;
+
+  h+=`<div class="disc">⚠️ 매수 권유가 아니라 참고용 스크리닝입니다. 진입 전 업비트 공지·뉴스를 직접 확인하고(DYOR), 한 번에 잃을 돈은 총자본의 1~2%로 제한하세요. +10~20%는 목표선이지 도달 보장이 아닙니다. 점수 기준은 아직 검증 중인 임시 설정입니다.</div>`;
+
+  out.innerHTML=h;
+
+  const cbtn=$("#copyBtn"), ta=$("#cpb");
+  cbtn.onclick=async()=>{ try{ await navigator.clipboard.writeText(copytext); }
+    catch(e){ ta.focus(); ta.select(); try{document.execCommand("copy");}catch(_){} }
+    cbtn.textContent="복사됨 ✓"; cbtn.style.background="#35C28B"; };
+
+  $("#expBtn").onclick=()=>{
+    const blob=new Blob([JSON.stringify(log,null,1)],{type:"application/json"});
+    const url=URL.createObjectURL(blob); const a=document.createElement("a");
+    a.href=url; a.download=`swing_log_${todayUTC()}.json`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); };
+  $("#impBtn").onclick=()=>$("#impFile").click();
+  $("#impFile").onchange=(e)=>{ const f=e.target.files[0]; if(!f) return;
+    const rd=new FileReader();
+    rd.onload=()=>{ try{ const inc=JSON.parse(rd.result);
+      if(!Array.isArray(inc)) throw new Error("배열 형식이 아님");
+      const cur=loadLog(); const have=new Set(cur.map(x=>x.date+"|"+x.symbol));
+      let added=0; for(const x of inc){ if(x&&x.date&&x.symbol&&!have.has(x.date+"|"+x.symbol)){ cur.push(x); have.add(x.date+"|"+x.symbol); added++; } }
+      saveLog(cur); alert(`불러오기 완료: ${added}건 추가 (총 ${cur.length}건).\n[실행]을 다시 누르면 반영됩니다.`);
+    }catch(err){ alert("불러오기 실패: "+err.message); } };
+    rd.readAsText(f); };
+}
+
+/* ---------- 실행 ---------- */
+async function run(){
+  runBtn.disabled=true; out.innerHTML=""; setProg(0);
+  const shortlist=parseInt($("#n").value,10);
+  try{
+    const log=loadLog();
+    setStatus("이전 예측 자동 평가 중…");
+    const nEval=await evaluateLog(log);
+    const res=await build(shortlist);
+    appendPredictions(log,res.rows,todayUTC());
+    saveLog(log);
+    setProg(1); setStatus(`완료 · 후보 ${res.rows.length}개 · 평가 ${nEval}건 · 규칙 ${CONFIG.version}`);
+    render(res,log,nEval);
+  }catch(e){
+    setStatus("오류: "+e.message);
+    out.innerHTML=`<div class="card warn">실행 중 오류가 났습니다: ${esc(e.message)}<br>잠시 후(업비트 요청 제한 가능) 다시 [실행]을 눌러보세요.</div>`;
+  }finally{ runBtn.disabled=false; }
+}
+runBtn.addEventListener("click",run);
+</script>
