@@ -87,7 +87,7 @@ const CONFIG = {
   // ▼ 업비트 요청이 "Failed to fetch"로 막히면(한국 IP rate limit) 아래를 본인 Cloudflare Worker 주소로 교체.
   //   예: "https://swing-proxy.chrispark1128.workers.dev/v1"  (끝에 /v1 반드시 포함)
   apiBase: "https://swing-proxy.chrispark1128.workers.dev/v1",
-  version: "v7.0",       // ← 규칙 바꿀 때마다 올리기
+  version: "v8.0",       // ← 규칙 바꿀 때마다 올리기 (v8.0: 국면 판단 3지표로 확장)
   evalWindow: 21,        // 예측 유효기간(일). 이 안에 목표/손절 안 닿으면 만료 처리
 
   ind: {                 // 지표 기간
@@ -129,7 +129,12 @@ const CONFIG = {
     resTooCloseTh:6, resTooClosePts:-6,  // 저항까지 6%뿐
     belowWeeklyPts:-6,                   // 주봉 아래(역추세)
     noisyStopAtr:1.2, noisyStopFrac:0.05, noisyStopPts:-5,  // 스탑 노이즈 위험
-    riskoffPts:-5,                       // BTC<50일선 국면
+  },
+  regime: {              // 국면(regime) 감점 — 전 후보에 공통 적용 (v8.0 신규)
+    btcBelowMa:-5,          // ① BTC < 50일선 (기존값 유지)
+    volContract:-3,         // ② 거래량 위축 (업비트 자금 유입 둔화)
+    volContractRatio:0.8,   //    BTC 일봉 거래대금(오늘·페이스보정) < 7일평균 × 이 값 → 위축
+    btcDominance:-2,        // ③ BTC 주도장 (btc7 > 후보 c7 중앙값 → 알트 소외)
   },
   plan: {                // 진입/손절/목표
     t1:1.10, t2:1.20,        // 목표가 배수(+10%·+20%)
@@ -149,7 +154,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r4";
+$("#vtag").textContent=CONFIG.version+" · web·r5";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -208,7 +213,7 @@ async function tickers(mks){ const o={};
       o[t.market]={price:t.trade_price,ch24:(t.signed_change_rate||0)*100,tv:t.acc_trade_price_24h||0}; }
   return o; }
 async function daily(mk,cnt=200){ const d=(await gj(`${UP}/candles/days?market=${mk}&count=${Math.min(cnt,200)}`)).reverse();
-  return [d.map(c=>c.high_price),d.map(c=>c.low_price),d.map(c=>c.trade_price),d.map(c=>c.candle_acc_trade_volume)]; }
+  return [d.map(c=>c.high_price),d.map(c=>c.low_price),d.map(c=>c.trade_price),d.map(c=>c.candle_acc_trade_volume),d.map(c=>c.candle_acc_trade_price)]; }
 
 /* 자기검증용: 날짜 포함 캔들 (캐시) */
 const _candCache={};
@@ -246,7 +251,7 @@ function headroom(a){ if(!a.res) return[null,null]; const p=a.p;
   if(p<a.res*0.995) return[(a.res-p)/p*100,"30일 저항"];
   if(a.res90>p*1.005) return[(a.res90-p)/p*100,"90일 매물대"]; return[99.0,null]; }
 
-function score(a,btc7,riskoff){ const C=CONFIG; const s={}; const p=a.p;
+function score(a,btc7,regimePen){ const C=CONFIG; const s={}; const p=a.p;
   let t=0;
   if(a.e20&&p>a.e20) t+=C.trend.aboveEmaFast;
   if(a.e20&&a.e50&&a.e20>a.e50) t+=C.trend.emaFastOverSlow;
@@ -274,7 +279,7 @@ function score(a,btc7,riskoff){ const C=CONFIG; const s={}; const p=a.p;
   if(hr!=null&&hr<P.resTooCloseTh) pen+=P.resTooClosePts;
   if(a.w10&&p<a.w10) pen+=P.belowWeeklyPts;
   if(P.noisyStopAtr*a.atr>P.noisyStopFrac*p) pen+=P.noisyStopPts;
-  if(riskoff) pen+=P.riskoffPts;
+  pen+=regimePen;   // 국면(regime) 감점: BTC<50일선·거래량위축·BTC주도장 합산 (build에서 계산)
   s["감점"]=pen;
   return [Math.max(0,Math.min(100,Math.round(base+pen))),s]; }
 
@@ -415,8 +420,15 @@ async function build(shortlist){
   setStatus("BTC 국면 분석 중…"); setProg(0.12);
   const btc=await daily("KRW-BTC",200); const btcCc=btc[2].slice(0,-1);
   const btc7= btcCc.length>=7? (btc[2][btc[2].length-1]/btcCc[btcCc.length-7]-1)*100 : null;
+  const btcClose=btc[2][btc[2].length-1];
   const btcE50=last(ema(btcCc,CONFIG.ind.emaSlow));
-  const riskoff=!!(btcE50&&btc[2][btc[2].length-1]<btcE50);
+  const riskoff=!!(btcE50&&btcClose<btcE50);              // 국면① BTC<50일선
+  // 국면② 거래량 위축: BTC 일봉 거래대금(오늘 페이스보정) vs 최근 7일 완성캔들 평균
+  const RG=CONFIG.regime; const btcTP=btc[4]||[];
+  const tpDone=btcTP.slice(0,-1);
+  const tpToday= btcTP.length? btcTP[btcTP.length-1]/Math.max(elapsed,0.08) : null;
+  const tpAvg7= tpDone.length>=7? tpDone.slice(-7).reduce((x,y)=>x+y,0)/7 : null;
+  const volContract=!!(tpToday!=null&&tpAvg7&&tpToday<tpAvg7*RG.volContractRatio);
   const mom=[],quiet=[];
   for(const u of uni){ const t=tk[u.market]; if(!t||(t.tv||0)<SEL.minTradeValue24h) continue;
     const liq=3*Math.max(Math.log10(t.tv+1)-8,0); const pen=u.warn?8:0; const ch=t.ch24;
@@ -428,26 +440,44 @@ async function build(shortlist){
   for(const[,u,t]of quiet){ if(picked.size>=shortlist) break; if(!picked.has(u.market)) picked.set(u.market,[u,t]); }
   for(const[,u,t]of mom.slice(nMom)){ if(picked.size>=shortlist) break; if(!picked.has(u.market)) picked.set(u.market,[u,t]); }
 
-  const rows=[],skipped=[]; const list=[...picked.values()]; let cnt=0;
+  // 1차: 후보 분석 (추가 API 없음 — 국면③용 c7 수집)
+  const anz=[],skipped=[]; const list=[...picked.values()]; let cnt=0;
   for(const[u,t]of list){ cnt++;
-    setStatus(`분석 중 ${cnt}/${list.length} — ${u.symbol}`); setProg(0.15+0.7*cnt/list.length);
+    setStatus(`분석 중 ${cnt}/${list.length} — ${u.symbol}`); setProg(0.15+0.65*cnt/list.length);
     let h,l,c,v; try{ [h,l,c,v]=await daily(u.market,200); }catch(e){ skipped.push(u.symbol); continue; }
     const a=analyze(h,l,c,v,elapsed); if(!a){ skipped.push(u.symbol); continue; }
-    const [sc,bd]=score(a,btc7,riskoff); const pl=plan(a); const [tr,tn]=tier(t.tv,u.warn);
+    const [tr,tn]=tier(t.tv,u.warn); anz.push({a,u,t,tr,tn}); }
+  // 국면③ BTC 주도장: btc7 > 후보(BTC 제외) c7 중앙값
+  const c7s=anz.filter(x=>x.u.symbol!=="BTC").map(x=>x.a.c7).filter(v=>v!=null).sort((x,y)=>x-y);
+  const medC7= c7s.length? (c7s.length%2? c7s[(c7s.length-1)/2] : (c7s[c7s.length/2-1]+c7s[c7s.length/2])/2) : null;
+  const btcDom=!!(btc7!=null&&medC7!=null&&btc7>medC7);
+  // 국면 종합 감점 + 켜진 플래그
+  let regimePen=0; const flags=[];
+  if(riskoff){ regimePen+=RG.btcBelowMa; flags.push("BTC 50일선 아래"); }
+  if(volContract){ regimePen+=RG.volContract; flags.push("거래량 위축"); }
+  if(btcDom){ regimePen+=RG.btcDominance; flags.push("BTC 주도장"); }
+  // 2차: 국면 감점 반영해 스코어링
+  const rows=[];
+  for(const{a,u,t,tr,tn}of anz){
+    const [sc,bd]=score(a,btc7,regimePen); const pl=plan(a);
     rows.push([sc,bd,a,pl,u,tr,tn]); }
   rows.sort((a,b)=>b[0]-a[0]);
-  return {rows,skipped,btc7,riskoff,now}; }
+  return {rows,skipped,btc7,riskoff,regimePen,flags,now}; }
 
 /* ---------- 렌더링 ---------- */
 function gcls(sc){ return sc>=75?"g75":(sc>=60?"g60":(sc>=45?"g45":"g0")); }
 function esc(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function regimeLabel(pen){
+  if(pen===0) return "🟢 리스크온 (BTC>50일선·거래량 유지·알트 순환)";
+  if(pen>=-5) return "🟡 중립 (일부 약세 신호)";
+  return "🔴 리스크오프 (약세 신호 겹침) — 스윙 비수기, 관망 권장"; }
 
 function render(res,log,nEval){
-  const {rows,skipped,btc7,riskoff,now}=res;
+  const {rows,skipped,btc7,regimePen,flags,now}=res;
   const nows=now.toISOString().slice(0,16).replace("T"," ")+" UTC";
   let h=`<div class="meta">업비트 스윙 후보 — ${nows} · 규칙 ${CONFIG.version}<br>
     KRW 상장만 · 목표 +10~20% · 완성 일봉 기준(오늘 캔들 제외)<br>
-    BTC 7일 ${btc7==null?"-":(btc7>=0?"+":"")+btc7.toFixed(1)+"%"} · 국면: ${riskoff?"⚠️ 리스크오프(BTC<50일선, 전 후보 -5)":"리스크온(BTC>50일선)"}</div>`;
+    BTC 7일 ${btc7==null?"-":(btc7>=0?"+":"")+btc7.toFixed(1)+"%"} · 국면: ${regimeLabel(regimePen)}${(flags&&flags.length)?`<br>&nbsp;&nbsp;↳ 켜진 신호: ${flags.join(" · ")} (전 후보 ${regimePen})`:""}</div>`;
   h+=`<div class="meta">점수만 보면 됨: 🟢75+ 강한 진입 · 🟡60~74 조건부 · ⚪45~59 관망 · ⛔45미만 제외. 급등추격·거래량부재·저항코앞·주봉역추세 등 자동 감점.</div>`;
 
   if(!rows.length) h+=`<div class="card">통과 후보 없음.</div>`;
