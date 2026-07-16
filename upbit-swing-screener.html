@@ -87,7 +87,7 @@ const CONFIG = {
   // ▼ 업비트 요청이 "Failed to fetch"로 막히면(한국 IP rate limit) 아래를 본인 Cloudflare Worker 주소로 교체.
   //   예: "https://swing-proxy.chrispark1128.workers.dev/v1"  (끝에 /v1 반드시 포함)
   apiBase: "https://swing-proxy.chrispark1128.workers.dev/v1",
-  version: "v9.0",       // ← 규칙 바꿀 때마다 올리기 (v9.0: 유의종목 자동 감점 + copytext 국면)
+  version: "v10.0",      // ← 규칙 바꿀 때마다 올리기 (v10.0: 제외 종목 추적 + copytext 성과통계)
   evalWindow: 21,        // 예측 유효기간(일). 이 안에 목표/손절 안 닿으면 만료 처리
 
   ind: {                 // 지표 기간
@@ -158,7 +158,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r7";
+$("#vtag").textContent=CONFIG.version+" · web·r8";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -344,12 +344,15 @@ function todayUTC(){ return new Date().toISOString().slice(0,10); }
 
 function appendPredictions(log,rows,today){
   const have=new Set(log.map(e=>e.date+"|"+e.symbol));
-  for(const [sc,bd,a,pl,u] of rows){
+  for(const [sc,bd,a,pl,u] of rows){                          // 등급 무관 상위 후보 전부 기록 (제외 추적용)
     if(have.has(today+"|"+u.symbol)) continue;
+    const gp= sc>=75?"🟢75+":(sc>=60?"🟡60~74":(sc>=45?"⚪45~59":"⛔<45"));  // 예측시 등급
+    const ws= a.c7!=null && a.c7>=15;                         // 예측시 급등(7d+15%↑) 여부
     log.push({date:today,symbol:u.symbol,name:u.name,market:"KRW-"+u.symbol,
       cfgVersion:CONFIG.version,
       score:sc,verdict:verdict(sc),bd:Object.assign({},bd),
-      price:a.p,stop:pl.stop,t1:pl.t1,t2:pl.t2,status:"pending"}); }
+      grade_at_prediction:gp,was_surge:ws,
+      price:a.p,stop:(pl.stop!=null?pl.stop:a.p*0.95),t1:(pl.t1!=null?pl.t1:a.p*1.10),t2:(pl.t2!=null?pl.t2:a.p*1.20),status:"pending"}); }
   return log; }
 
 async function evaluateLog(log,window=CONFIG.evalWindow){ let changed=0; const today=new Date();
@@ -375,6 +378,42 @@ async function evaluateLog(log,window=CONFIG.evalWindow){ let changed=0; const t
     else continue;
     changed++; }
   return changed; }
+
+function pruneLog(log){   // 평가완료 + 60일 초과 예측 자동 정리(로그 용량 관리). 대기 예측은 항상 유지
+  const today=new Date();
+  return log.filter(e=>{
+    if(e.status==="pending") return true;
+    const age=Math.floor((today-new Date(e.date+"T00:00:00Z"))/86400000);
+    return age<=60;
+  });
+}
+
+function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). 원본 로그가 아닌 '계산된 수치'만 반환
+  const curV=CONFIG.version;
+  const GRADES=[["🟢75+",75,101],["🟡60~74",60,75],["⚪45~59",45,60],["⛔<45",-1,45]];
+  const done=(e)=>["stop","t1","t2","expire"].includes(e.status);
+  const ev=log.filter(e=>done(e)&&(e.cfgVersion||"이전")===curV);
+  const pend=log.filter(e=>e.status==="pending"&&(e.cfgVersion||"이전")===curV).length;
+  const grades=[]; let small=true;
+  for(const[label,lo,hi]of GRADES){ const g=ev.filter(e=>e.score>=lo&&e.score<hi);
+    if(!g.length){ grades.push({label,n:0}); continue; }
+    const n=g.length; if(n>=10) small=false;
+    const t1=g.filter(e=>["t1","t2"].includes(e.status)).length;
+    const st=g.filter(e=>e.status==="stop").length;
+    grades.push({label,n,t1pct:t1/n*100,stoppct:st/n*100,avgpct:g.reduce((x,e)=>x+(e.ret||0),0)/n*100}); }
+  const track=(arr)=>{ if(!arr.length) return {n:0}; const n=arr.length;
+    return {n, avg:arr.reduce((x,e)=>x+(e.ret||0),0)/n*100,
+      up:arr.filter(e=>(e.ret||0)>=0.10).length/n*100, down:arr.filter(e=>(e.ret||0)<=-0.05).length/n*100}; };
+  const excl=track(ev.filter(e=>e.score<45)), surge=track(ev.filter(e=>e.was_surge));
+  let exclVerdict;
+  if(excl.n<10) exclVerdict="표본 부족/혼재, 관찰 지속";
+  else if(excl.avg<0 && excl.down>50) exclVerdict="✅ 거르기 유효: 제외 종목 실제 하락";
+  else if(excl.avg>5 && excl.up>50) exclVerdict="⚠️ 거르기 재검토: 제외 종목 실제 상승(기회 놓침 가능)";
+  else exclVerdict="표본 부족/혼재, 관찰 지속";
+  const upper=ev.filter(e=>e.score>=60).length;
+  const guard=(small||upper<10)?"🚧 튜닝 보류(표본 부족)":"검증 가능(표본 충분)";
+  return {curV, n:ev.length, pend, grades, excl, surge, exclVerdict, guard, hasData:ev.length>0};
+}
 
 function perfStats(log){
   const curV=CONFIG.version;
@@ -413,6 +452,13 @@ function perfStats(log){
   if(small||upper.length<10)
     h+=`<div class="meta warn">🚧 튜닝 보류 권고: 표본 부족(🟢🟡 상위등급 평가 ${upper.length}건). 각 등급 n≥10 + 21일 창이 여러 번 완주해야 통계 유효. 지금 CONFIG 가중치 바꾸면 과적합 위험 — 데이터 쌓일 때까지 관찰만.</div>`;
   else h+=`<div class="meta">🟢 등급이 아래 등급보다 T1 적중률·평균수익이 높아야 점수 체계 유효. 이 표를 클로드에 붙여 CONFIG 튜닝 제안 요청 가능.</div>`;
+  // 제외 종목 추적 (v10.0) — 거르기 로직이 옳은지 검증
+  const ps=perfSummary(log);
+  h+=`<div class="sechd" style="font-size:14px">🗑️ 제외 종목 추적 <span style="color:#7b839a;font-size:11px;font-weight:400">(거르기 로직 검증)</span></div>`;
+  h+=`<table><tr><th></th><th>n</th><th>평균수익</th><th>상승 +10%↑</th><th>하락 -5%↓</th></tr>`;
+  const trk=(lab,t)=> t.n?`<tr><td>${lab}</td><td>${t.n}</td><td>${t.avg>=0?"+":""}${t.avg.toFixed(1)}%</td><td>${t.up.toFixed(0)}%</td><td>${t.down.toFixed(0)}%</td></tr>`:`<tr><td>${lab}</td><td>0</td><td>-</td><td>-</td><td>-</td></tr>`;
+  h+=trk("제외(&lt;45)",ps.excl)+trk("급등제외(7d+15%↑)",ps.surge)+`</table>`;
+  h+=`<div class="meta">${ps.exclVerdict}</div>`;
   return h; }
 
 /* ---------- 메인 빌드 ---------- */
@@ -525,7 +571,16 @@ function render(res,log,nEval){
   const flagTxt= (flags&&flags.length)?flags.join(" · "):"없음";
   const btcTxt= btc7==null?"-":(btc7>=0?"+":"")+btc7.toFixed(1)+"%";
   const detail=rows.map(x=>`${x[4].symbol}${x[4].warn?"🚨":""}(${x[0]}${svW(x[0])},7d${c7f(x[2])})`).join(" · ");
-  const copytext=`[심볼] ${syms}\n[종목명] ${names}\n[국면] ${regShort} · BTC7일 ${btcTxt} · 켜진신호: ${flagTxt} · 규칙 ${CONFIG.version}\n[상세] ${detail}\n→ 업비트 스윙 후보야(숫자=총점, 높을수록 진입매력). [상세]의 🚨는 업비트 유의종목=진입금지. 각 종목 글로벌 동향·촉매·악재 조사해서 진입 판단 도와줘.`;
+  const psum=perfSummary(log);   // 성과 통계(계산된 요약만, 원본 로그 미포함)
+  let perfBlock;
+  if(!psum.hasData){ perfBlock=`[성과] 아직 평가 완료 없음·대기 ${psum.pend}건\n`; }
+  else {
+    const gStr=psum.grades.filter(g=>g.n).map(g=>`${g.label} n${g.n}·T1 ${g.t1pct.toFixed(0)}%·스탑 ${g.stoppct.toFixed(0)}%·평균 ${g.avgpct>=0?"+":""}${g.avgpct.toFixed(1)}%`).join(" / ")||"-";
+    const eT=psum.excl.n?`n${psum.excl.n}·평균 ${psum.excl.avg>=0?"+":""}${psum.excl.avg.toFixed(1)}%·상승 ${psum.excl.up.toFixed(0)}%·하락 ${psum.excl.down.toFixed(0)}%`:"n0";
+    const sT=psum.surge.n?`n${psum.surge.n}·평균 ${psum.surge.avg>=0?"+":""}${psum.surge.avg.toFixed(1)}%·상승 ${psum.surge.up.toFixed(0)}%·하락 ${psum.surge.down.toFixed(0)}%`:"n0";
+    perfBlock=`[성과] 규칙 ${CONFIG.version} · 평가 ${psum.n}건 · 대기 ${psum.pend}건\n등급별(n·T1%·스탑%·평균): ${gStr}\n제외추적(<45 사후): ${eT}\n급등제외(7d+15%↑): ${sT}\n가드레일: ${psum.guard}\n`;
+  }
+  const copytext=`[심볼] ${syms}\n[종목명] ${names}\n[국면] ${regShort} · BTC7일 ${btcTxt} · 켜진신호: ${flagTxt} · 규칙 ${CONFIG.version}\n[상세] ${detail}\n${perfBlock}→ 업비트 스윙 후보야. [상세]숫자=총점,🚨=유의종목(진입금지). [성과]는 자기검증 통계. 동향 조사 + (성과 있으면)거르기 로직 유효성 판단 도와줘.`;
   h+=`<div class="copybox"><b>📋 클로드에 넘길 요약</b>
     <textarea id="cpb" readonly>${esc(copytext)}</textarea>
     <button id="copyBtn">복사</button>
@@ -583,11 +638,12 @@ async function run(){
   runBtn.disabled=true; out.innerHTML=""; setProg(0);
   const shortlist=parseInt($("#n").value,10);
   try{
-    const log=loadLog();
+    let log=loadLog();
     setStatus("이전 예측 자동 평가 중…");
     const nEval=await evaluateLog(log);
     const res=await build(shortlist);
     appendPredictions(log,res.rows,todayUTC());
+    log=pruneLog(log);              // 평가완료 60일 초과 정리(로그 용량 관리)
     saveLog(log);
     setProg(1); setStatus(`완료 · 후보 ${res.rows.length}개 · 평가 ${nEval}건 · 규칙 ${CONFIG.version}`);
     render(res,log,nEval);
