@@ -87,7 +87,7 @@ const CONFIG = {
   // ▼ 업비트 요청이 "Failed to fetch"로 막히면(한국 IP rate limit) 아래를 본인 Cloudflare Worker 주소로 교체.
   //   예: "https://swing-proxy.chrispark1128.workers.dev/v1"  (끝에 /v1 반드시 포함)
   apiBase: "https://swing-proxy.chrispark1128.workers.dev/v1",
-  version: "v8.0",       // ← 규칙 바꿀 때마다 올리기 (v8.0: 국면 판단 3지표로 확장)
+  version: "v9.0",       // ← 규칙 바꿀 때마다 올리기 (v9.0: 유의종목 자동 감점 + copytext 국면)
   evalWindow: 21,        // 예측 유효기간(일). 이 안에 목표/손절 안 닿으면 만료 처리
 
   ind: {                 // 지표 기간
@@ -136,6 +136,10 @@ const CONFIG = {
     volContractRatio:0.8,   //    BTC 일봉 거래대금(오늘·페이스보정) < 7일평균 × 이 값 → 위축
     btcDominance:-2,        // ③ BTC 주도장 (btc7 > 후보 c7 중앙값 → 알트 소외)
   },
+  warning: {             // 업비트 마켓 이벤트 감점 (v9.0 신규) — 전 후보 개별 적용
+    warnPts:-25,            // 투자유의(market_event.warning) — 상폐 위험, 사실상 제외권으로
+    cautionPts:-8,          // 주의환기(market_event.caution) — 입출금/급등 주의
+  },
   plan: {                // 진입/손절/목표
     t1:1.10, t2:1.20,        // 목표가 배수(+10%·+20%)
     atrEntryLow:1.0,         // 진입존 하단 = max(지지, 현재가 - N×ATR)
@@ -154,7 +158,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r5";
+$("#vtag").textContent=CONFIG.version+" · web·r6";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -206,7 +210,8 @@ const mx=(a)=>Math.max.apply(null,a), mn=(a)=>Math.min.apply(null,a);
 async function universe(){ const d=await gj(`${UP}/market/all?isDetails=true`); const o=[];
   for(const m of d){ const mk=m.market||"";
     if(mk.startsWith("KRW-")){ const ev=m.market_event||{};
-      o.push({market:mk,symbol:mk.slice(4),name:m.korean_name,warn:!!(ev&&ev.warning)}); } } return o; }
+      o.push({market:mk,symbol:mk.slice(4),name:m.korean_name,warn:!!(ev&&ev.warning),
+        caution:!!(ev&&ev.caution&&Object.values(ev.caution).some(Boolean))}); } } return o; }
 async function tickers(mks){ const o={};
   for(let i=0;i<mks.length;i+=30){ const q=encodeURIComponent(mks.slice(i,i+30).join(","));
     for(const t of await gj(`${UP}/ticker?markets=${q}`))
@@ -459,7 +464,8 @@ async function build(shortlist){
   // 2차: 국면 감점 반영해 스코어링
   const rows=[];
   for(const{a,u,t,tr,tn}of anz){
-    const [sc,bd]=score(a,btc7,regimePen); const pl=plan(a);
+    const warnPen= u.warn?CONFIG.warning.warnPts:(u.caution?CONFIG.warning.cautionPts:0);  // 유의/주의 개별 감점
+    const [sc,bd]=score(a,btc7,regimePen+warnPen); const pl=plan(a);
     rows.push([sc,bd,a,pl,u,tr,tn]); }
   rows.sort((a,b)=>b[0]-a[0]);
   return {rows,skipped,btc7,riskoff,regimePen,flags,now}; }
@@ -485,10 +491,13 @@ function render(res,log,nEval){
     const mm=(a.macd!=null&&a.sig!=null&&a.macd>a.sig)?"▲골든(단기 상승신호)":"▽데드(단기 하락신호)";
     const pentxt=bd["감점"]?` · 감점 ${bd["감점"]}`:"";
     const wk=(a.w10&&a.p>=a.w10)?"위쪽(장기 흐름 양호)":"⚠️아래쪽(장기 하락 중)";
+    const wbadge= u.warn?` <span style="background:#3a1720;color:#ff8ba0;font-size:12px;font-weight:800;padding:2px 7px;border-radius:7px">🚨유의종목</span>`
+                 :(u.caution?` <span style="background:#3d340f;color:#ffd257;font-size:12px;font-weight:700;padding:2px 7px;border-radius:7px">⚠️주의환기</span>`:"");
+    const warnLead= u.warn?"⚠️ 업비트 투자유의 지정 — 상폐 위험, 진입 금지 — ":"";
     h+=`<div class="card">
       <h3><span class="sym">${idx+1}. ${esc(u.symbol)}</span> <span class="kname">${esc(u.name||"")}</span>
-        <span class="sc ${gcls(sc)}">${sc} ${verdict(sc)}</span></h3>
-      <div class="easy">💬 ${esc(plainSummary(sc,bd,a,pl))}</div>`;
+        <span class="sc ${gcls(sc)}">${sc} ${verdict(sc)}</span>${wbadge}</h3>
+      <div class="easy">💬 ${esc(warnLead)}${esc(plainSummary(sc,bd,a,pl))}</div>`;
     if(a.rsi!=null){
       h+=`<div class="line">${tr} ${tn} · 추세${bd["추세"]}/모멘텀${bd["모멘텀"]}/거래량${bd["거래량"]}/셋업${bd["셋업"]}/상대강도${bd["상대강도"]}${pentxt}</div>
         <div class="line">현재가 ${won(a.p)} · RSI ${rsiWord(a.rsi)} · MACD ${mm} · 거래량 ${a.vr!=null?a.vr.toFixed(2)+"배(20일 평균 대비)":"-"}</div>`;
@@ -508,8 +517,11 @@ function render(res,log,nEval){
   const c7f=(x)=>x.c7!=null?`${x.c7>=0?"+":""}${x.c7.toFixed(0)}%`:"-";
   const names=rows.filter(x=>x[4].name).map(x=>`${x[4].symbol}=${x[4].name}`).join(", ");
   const syms=rows.map(x=>x[4].symbol).join(", ");
-  const detail=rows.map(x=>`${x[4].symbol}(${x[0]}${svW(x[0])},7d${c7f(x[2])})`).join(" · ");
-  const copytext=`[심볼] ${syms}\n[종목명] ${names}\n[상세] ${detail}\n→ 업비트 스윙 후보야(숫자=총점, 높을수록 진입매력). 각 종목 글로벌 동향·촉매·악재 조사해서 진입해도 될지 판단 도와줘.`;
+  const regShort= regimePen===0?"🟢 리스크온":(regimePen>=-5?"🟡 중립":"🔴 리스크오프");
+  const flagTxt= (flags&&flags.length)?flags.join(" · "):"없음";
+  const btcTxt= btc7==null?"-":(btc7>=0?"+":"")+btc7.toFixed(1)+"%";
+  const detail=rows.map(x=>`${x[4].symbol}${x[4].warn?"🚨":""}(${x[0]}${svW(x[0])},7d${c7f(x[2])})`).join(" · ");
+  const copytext=`[심볼] ${syms}\n[종목명] ${names}\n[국면] ${regShort} · BTC7일 ${btcTxt} · 켜진신호: ${flagTxt} · 규칙 ${CONFIG.version}\n[상세] ${detail}\n→ 업비트 스윙 후보야(숫자=총점, 높을수록 진입매력). [상세]의 🚨는 업비트 유의종목=진입금지. 각 종목 글로벌 동향·촉매·악재 조사해서 진입 판단 도와줘.`;
   h+=`<div class="copybox"><b>📋 클로드에 넘길 요약</b>
     <textarea id="cpb" readonly>${esc(copytext)}</textarea>
     <button id="copyBtn">복사</button>
