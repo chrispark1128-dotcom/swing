@@ -138,7 +138,7 @@ const CONFIG = {
   },
   warning: {             // 업비트 마켓 이벤트 감점 (v9.0 신규) — 전 후보 개별 적용
     warnPts:-25,            // 투자유의(market_event.warning) — 상폐 위험, 사실상 제외권으로
-    cautionPts:-8,          // 주의환기(market_event.caution) — 입출금/급등 주의
+    cautionPts:-15,         // 주의환기(caution: 거래량급증·가격급등락 등) — 업비트 "위험" 표기, 급등 회피 강화
   },
   plan: {                // 진입/손절/목표
     t1:1.10, t2:1.20,        // 목표가 배수(+10%·+20%)
@@ -158,7 +158,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r6";
+$("#vtag").textContent=CONFIG.version+" · web·r7";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -207,11 +207,13 @@ function last(x){ for(let i=x.length-1;i>=0;i--) if(x[i]!=null) return x[i]; ret
 const mx=(a)=>Math.max.apply(null,a), mn=(a)=>Math.min.apply(null,a);
 
 /* ---------- 업비트 데이터 ---------- */
+const CAUTION_LABELS={PRICE_FLUCTUATIONS:"가격급등락",TRADING_VOLUME_SOARING:"거래량급증",DEPOSIT_AMOUNT_SOARING:"입금량급증",GLOBAL_PRICE_DIFFERENCES:"가격괴리",CONCENTRATION_OF_SMALL_ACCOUNTS:"소액집중"};
 async function universe(){ const d=await gj(`${UP}/market/all?isDetails=true`); const o=[];
   for(const m of d){ const mk=m.market||"";
-    if(mk.startsWith("KRW-")){ const ev=m.market_event||{};
+    if(mk.startsWith("KRW-")){ const ev=m.market_event||{}; const cev=(ev&&ev.caution)||{};
+      const cReasons=Object.keys(cev).filter(k=>cev[k]).map(k=>CAUTION_LABELS[k]||k);
       o.push({market:mk,symbol:mk.slice(4),name:m.korean_name,warn:!!(ev&&ev.warning),
-        caution:!!(ev&&ev.caution&&Object.values(ev.caution).some(Boolean))}); } } return o; }
+        caution:cReasons.length>0,cautionReasons:cReasons}); } } return o; }
 async function tickers(mks){ const o={};
   for(let i=0;i<mks.length;i+=30){ const q=encodeURIComponent(mks.slice(i,i+30).join(","));
     for(const t of await gj(`${UP}/ticker?markets=${q}`))
@@ -491,9 +493,11 @@ function render(res,log,nEval){
     const mm=(a.macd!=null&&a.sig!=null&&a.macd>a.sig)?"▲골든(단기 상승신호)":"▽데드(단기 하락신호)";
     const pentxt=bd["감점"]?` · 감점 ${bd["감점"]}`:"";
     const wk=(a.w10&&a.p>=a.w10)?"위쪽(장기 흐름 양호)":"⚠️아래쪽(장기 하락 중)";
+    const cReason=(u.cautionReasons&&u.cautionReasons.length)?u.cautionReasons.join("·"):"주의환기";
     const wbadge= u.warn?` <span style="background:#3a1720;color:#ff8ba0;font-size:12px;font-weight:800;padding:2px 7px;border-radius:7px">🚨유의종목</span>`
-                 :(u.caution?` <span style="background:#3d340f;color:#ffd257;font-size:12px;font-weight:700;padding:2px 7px;border-radius:7px">⚠️주의환기</span>`:"");
-    const warnLead= u.warn?"⚠️ 업비트 투자유의 지정 — 상폐 위험, 진입 금지 — ":"";
+                 :(u.caution?` <span style="background:#3d340f;color:#ffd257;font-size:12px;font-weight:700;padding:2px 7px;border-radius:7px">⚠️${esc(cReason)} 주의</span>`:"");
+    const warnLead= u.warn?"⚠️ 업비트 투자유의 지정 — 상폐 위험, 진입 금지 — "
+                  :(u.caution?`⚠️ 업비트 ${cReason} 주의 — 급변동 위험 — `:"");
     h+=`<div class="card">
       <h3><span class="sym">${idx+1}. ${esc(u.symbol)}</span> <span class="kname">${esc(u.name||"")}</span>
         <span class="sc ${gcls(sc)}">${sc} ${verdict(sc)}</span>${wbadge}</h3>
