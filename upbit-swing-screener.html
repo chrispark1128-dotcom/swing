@@ -167,7 +167,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r15";
+$("#vtag").textContent=CONFIG.version+" · web·r16";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -1049,16 +1049,25 @@ function render(res,log,nEval){
     const cur=loadLog(); const vs=await krwMarketSet(); const s=scanContamination(cur,vs);
     $("#scanOut").innerHTML=`<b>점검 결과 (dry-run · 삭제 안 함)</b> — 총 ${s.total}건<br>`
       +`🔴 <b>확정 오염 ${s.confirmed.length}건</b>${symList(s.confirmedSyms)}<br>`
-      +`🟡 의심 ${s.suspect.length}건${symList(s.suspectSyms)} <span style="color:#7b839a">← 상폐 코인일 수 있어 자동 삭제 안 함</span><br>`
+      +`🟡 의심 ${s.suspect.length}건${symList(s.suspectSyms)} <span style="color:#7b839a">← 목록 확인 후 판단: 주식 티커면 삭제, 상폐 코인이면 보존 (제거 시 물어봄)</span><br>`
       +`사유: ${Object.entries(s.reasons).map(([k,v])=>k+" "+v).join(" · ")||"-"}<br>`
       +`제거 시 잔여: <b>확정만 ${s.afterRemoveConfirmed}건</b> / 확정+의심 ${s.afterRemoveBoth}건`;
   };
   $("#delBtn").onclick=async()=>{
     const cur=loadLog(); const vs=await krwMarketSet(); const s=scanContamination(cur,vs);
-    if(!s.confirmed.length){ alert("확정 오염 레코드가 없습니다. (의심 "+s.suspect.length+"건은 보존)"); return; }
-    if(!confirm(`확정 오염 ${s.confirmed.length}건을 삭제합니다.\n의심 ${s.suspect.length}건은 보존(상폐 가능).\n${cur.length} → ${s.afterRemoveConfirmed}건\n\n삭제 전 자동 스냅샷 저장됩니다. 진행할까요?`)) return;
+    if(!s.confirmed.length&&!s.suspect.length){ alert("오염 레코드가 없습니다."); return; }
+    const bad=new Set();
+    if(s.confirmed.length){
+      if(confirm(`🔴 확정 오염 ${s.confirmed.length}건을 삭제합니다.\n예: ${s.confirmedSyms.slice(0,6).join(", ")}\n${cur.length} → ${s.afterRemoveConfirmed}건\n\n삭제 전 자동 스냅샷 저장. 진행할까요?`))
+        s.confirmed.forEach(x=>bad.add(x.e));
+      else return;
+    }
+    if(s.suspect.length){   // 의심은 개별 판단 — 주식 티커면 삭제, 상폐 코인이면 보존
+      if(confirm(`🟡 의심 ${s.suspect.length}건도 함께 삭제할까요?\n${s.suspectSyms.slice(0,10).join(", ")}${s.suspectSyms.length>10?" 외":""}\n\n[확인] = 위 목록이 코인이 아님(주식 등) → 삭제\n[취소] = 상폐된 코인 → 보존`))
+        s.suspect.forEach(x=>bad.add(x.e));
+    }
+    if(!bad.size){ alert("삭제할 항목이 없습니다."); return; }
     snapshot(cur);
-    const bad=new Set(s.confirmed.map(x=>x.e));
     const kept=cur.filter(e=>!bad.has(e));
     saveLog(kept);
     alert(`삭제 완료: ${cur.length} → ${kept.length}건 (제거 ${cur.length-kept.length})\n↩️ 되돌리기로 복원 가능. [실행]을 눌러 반영하세요.`);
