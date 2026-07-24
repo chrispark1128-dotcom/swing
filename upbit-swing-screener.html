@@ -167,7 +167,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r13";
+$("#vtag").textContent=CONFIG.version+" · web·r14";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -397,6 +397,32 @@ async function evaluateLog(log,window=CONFIG.evalWindow){ let changed=0; const t
     else continue;
     changed++; }
   return changed; }
+
+// 임포트 관용 파서: 배열 / {log:[...]} / 객체맵 / NDJSON 등 흔한 형태를 자동 인식. 실패 시 원인 진단 메시지
+function toRecords(txt){
+  const t=String(txt).replace(/^﻿/,"").trim();
+  if(!t) throw new Error("파일이 비어 있음");
+  let data=null, note="";
+  try{ data=JSON.parse(t); }
+  catch(e){                                  // NDJSON(줄마다 JSON) 시도
+    const arr=[]; for(const l of t.split(/\r?\n/)){ const s=l.trim().replace(/,$/,""); if(!s) continue;
+      try{ const o=JSON.parse(s); if(o&&typeof o==="object") arr.push(o); }catch(_){} }
+    if(arr.length) return {recs:arr, note:`NDJSON ${arr.length}줄`};
+    throw new Error(`JSON 파싱 실패 (${e.message}).\n파일 앞부분: ${t.slice(0,80)}`);
+  }
+  if(Array.isArray(data)) return {recs:data, note:`배열 ${data.length}건`};
+  if(data&&typeof data==="object"){
+    for(const k of ["log","data","predictions","records","items","entries","result","logs"])
+      if(Array.isArray(data[k])) return {recs:data[k], note:`{${k}:[...]} ${data[k].length}건`};
+    const anyK=Object.keys(data).find(k=>Array.isArray(data[k])&&data[k].length&&typeof data[k][0]==="object");
+    if(anyK) return {recs:data[anyK], note:`{${anyK}:[...]} ${data[anyK].length}건`};
+    const vals=Object.values(data);
+    if(vals.length&&vals.every(v=>v&&typeof v==="object"&&!Array.isArray(v)))
+      return {recs:vals, note:`객체맵 ${vals.length}건`};
+    throw new Error(`객체인데 레코드 배열을 못 찾음.\n최상위 키: ${Object.keys(data).slice(0,8).join(", ")||"(없음)"}`);
+  }
+  throw new Error("지원하지 않는 형식: "+typeof data);
+}
 
 function pruneLog(log){   // 평가완료 + 60일 초과 예측 자동 정리(로그 용량 관리). 대기 예측은 항상 유지
   const today=new Date();
@@ -973,16 +999,18 @@ function render(res,log,nEval){
   $("#impBtn").onclick=()=>$("#impFile").click();
   $("#impFile").onchange=(e)=>{ const f=e.target.files[0]; if(!f) return;
     const rd=new FileReader();
-    rd.onload=()=>{ try{ const inc=JSON.parse(rd.result);
-      if(!Array.isArray(inc)) throw new Error("배열 형식이 아님");
+    rd.onload=()=>{ try{ const parsed=toRecords(rd.result); const inc=parsed.recs;
+      const valid=inc.filter(x=>x&&x.date&&x.symbol);
+      if(!valid.length) throw new Error(`레코드 ${inc.length}건 중 date+symbol 있는 건이 0건.\n첫 레코드 키: ${inc[0]&&typeof inc[0]==="object"?Object.keys(inc[0]).slice(0,8).join(", "):"(객체 아님)"}`);
       const cur=loadLog(); const have=new Set(cur.map(x=>x.date+"|"+x.symbol));
       let added=0, leg=0;
-      for(const x of inc){ if(!(x&&x.date&&x.symbol)) continue; const key=x.date+"|"+x.symbol; if(have.has(key)) continue; have.add(key);
+      for(const x of valid){ const key=x.date+"|"+x.symbol; if(have.has(key)) continue; have.add(key);
         if(!x.cfgVersion){   // 레거시(버전태그 없음) → 측정 전용 풀. 심볼·예측일만 사용, status/score/스탑판정 전부 폐기
           cur.push({date:x.date,symbol:x.symbol,market:x.market||("KRW-"+x.symbol),pool:"legacy",status:"legacy"}); leg++;
         } else { cur.push(x); added++; }
       }
-      saveLog(cur); alert(`불러오기 완료: 일반 ${added}건 · 레거시(측정풀) ${leg}건.\n레거시는 가격에서 재계산되며 게이트·등급성과엔 미포함.\n[실행]을 누르면 반영됩니다.`);
+      const dup=valid.length-added-leg;
+      saveLog(cur); alert(`불러오기 완료 [형식: ${parsed.note}]\n유효 ${valid.length}건 → 일반 ${added} · 레거시(측정풀) ${leg} · 중복스킵 ${dup}\n레거시는 가격에서 재계산되며 게이트·등급성과엔 미포함.\n[실행]을 누르면 반영됩니다.`);
     }catch(err){ alert("불러오기 실패: "+err.message); } };
     rd.readAsText(f); };
 }
