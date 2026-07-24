@@ -167,7 +167,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r14";
+$("#vtag").textContent=CONFIG.version+" · web·r15";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -398,6 +398,37 @@ async function evaluateLog(log,window=CONFIG.evalWindow){ let changed=0; const t
     changed++; }
   return changed; }
 
+/* ═══ 오염 방지: 업비트 마켓 유효성 + 주식 스크리너 로그 식별 ═══ */
+const MKT_RE=/^KRW-[A-Z0-9]+$/;
+const STOCK_FIELDS=["sector","industry","exchange","PER","per","PBR","pbr","EPS","eps","ROE","roe",
+  "ext60","ma50_gap","rs","rs_slope","marketCap","market_cap","revenue","ticker_type"];
+function mktOf(e){ return e.market||(e.symbol?("KRW-"+e.symbol):""); }
+let _uniSet=null;                       // 업비트 KRW 마켓 심볼 캐시(세션 1회)
+async function krwMarketSet(){ if(_uniSet) return _uniSet;
+  try{ const uni=await universe(); _uniSet=new Set(uni.map(u=>u.market)); }catch(e){ _uniSet=null; }
+  return _uniSet; }
+
+// 오염 스캔(dry-run 전용, 삭제 안 함). 확정/의심을 분리 — 상폐 코인 오판 방지
+function scanContamination(log, validSet){
+  const confirmed=[], suspect=[], reasons={};
+  const bump=(r)=>{ reasons[r]=(reasons[r]||0)+1; };
+  for(const e of log){
+    if(!e||typeof e!=="object") continue;
+    const mk=mktOf(e); const rs=[];
+    if(!MKT_RE.test(mk)) rs.push("마켓형식 불일치");
+    const sf=STOCK_FIELDS.filter(k=>e[k]!==undefined);
+    if(sf.length) rs.push("주식필드("+sf.slice(0,3).join(",")+")");
+    if(/^v3\./.test(e.cfgVersion||"")) rs.push("주식버전 v3.x");
+    if(rs.length){ rs.forEach(bump); confirmed.push({e,rs}); continue; }
+    if(validSet&&validSet.size&&!validSet.has(mk)){ bump("업비트 현재목록에 없음(상폐 가능)"); suspect.push({e,rs:["업비트 현재목록에 없음"]}); }
+  }
+  const uniq=(arr)=>[...new Set(arr.map(x=>x.e.symbol||mktOf(x.e)))];
+  return {total:log.length, confirmed, suspect, reasons,
+    confirmedSyms:uniq(confirmed), suspectSyms:uniq(suspect),
+    afterRemoveConfirmed: log.length-confirmed.length,
+    afterRemoveBoth: log.length-confirmed.length-suspect.length};
+}
+
 // 임포트 관용 파서: 배열 / {log:[...]} / 객체맵 / NDJSON 등 흔한 형태를 자동 인식. 실패 시 원인 진단 메시지
 function toRecords(txt){
   const t=String(txt).replace(/^﻿/,"").trim();
@@ -467,22 +498,30 @@ function qualityAt(hs,ls,cs,idx){
 async function backfillLog(log){
   const M=CONFIG.measure, W=M.window, todayStr=todayUTC();
   // 대상: 21일 확정 미완료 건 + 오늘 아직 잠정갱신 안 된 건 (잠정치는 매일 갱신)
-  const need=log.filter(e=>{ if(!(e&&e.date&&(e.symbol||e.market))) return false;
+  const cand=log.filter(e=>{ if(!(e&&e.date&&(e.symbol||e.market))) return false;
     if(e.pool==="legacy") return e.backfilled!==true;          // 레거시는 과거 고정 데이터 → 1회만 백필
     return e.backfilled!==true||e.bf_todate_date!==todayStr; });
-  if(!need.length) return {done:0,prov:0,fixed:0,skipped:0};
-  let btc; try{ btc=await candDates("KRW-BTC"); }catch(err){ return {done:0,prov:0,skipped:need.length}; }
-  const bIdx={}; btc[0].forEach((d,i)=>{ bIdx[d]=i; });
-  let done=0, prov=0, fixed=0, skipped=0, i=0;
+  // ★오염 가드: 업비트 KRW 마켓이 아닌 레코드(주식 로그 등)는 API 조회 자체를 하지 않음
+  const validSet=await krwMarketSet();
+  let done=0, prov=0, fixed=0, i=0, skip_invalid_market=0, skip_fetch_fail=0, skip_not_matured=0;
+  const need=cand.filter(e=>{ const mk=mktOf(e);
+    if(!MKT_RE.test(mk)||(validSet&&validSet.size&&!validSet.has(mk))){ skip_invalid_market++; return false; }
+    return true; });
+  const R=()=>({done,prov,fixed,skip_invalid_market,skip_fetch_fail,skip_not_matured,
+    skipped:skip_invalid_market+skip_fetch_fail});
+  if(!need.length) return R();
+  let btc; try{ btc=await candDates("KRW-BTC"); }catch(err){ skip_fetch_fail+=need.length; return R(); }
+  const bIdx={}; btc[0].forEach((d,i2)=>{ bIdx[d]=i2; });
   for(const e of need){
     i++;
     if(!e.market) e.market="KRW-"+e.symbol;                 // 키 복원(레코드에 market 없을 때)
-    setStatus(`성과 백필 ${i}/${need.length} — ${e.symbol}`);
+    setStatus(`성과 백필 ${i}/${need.length} — ${e.symbol}${skip_invalid_market?` (오염 ${skip_invalid_market}건 건너뜀)`:""}`);
+    if(i%25===0) saveLog(log);                              // ★체크포인트: 중단돼도 진행분 보존
     let ds,hs,ls,cs;
-    try{ [ds,hs,ls,cs]=await candDates(e.market); }catch(err){ skipped++; continue; }   // 상폐/조회실패
+    try{ [ds,hs,ls,cs]=await candDates(e.market); }catch(err){ skip_fetch_fail++; continue; }   // 상폐/조회실패
     let i0=ds.indexOf(e.date);
     if(i0<0){ i0=-1; for(let k=0;k<ds.length;k++){ if(ds[k]<=e.date) i0=k; else break; } }
-    if(i0<0){ skipped++; continue; }
+    if(i0<0){ skip_fetch_fail++; continue; }
     if(e.price==null) e.price=cs[i0];                       // 예측일 종가 복원
     const base=e.price;
     if(!e.quality_done){ const q=qualityAt(hs,ls,cs,i0); if(q){ Object.assign(e,q); e.quality_done=true; } }
@@ -539,9 +578,9 @@ async function backfillLog(log){
             e.simDays["k"+k]= hit!=null? (hit-i0) : null; } }   // k별 스탑 도달일수(미도달=null)
         e.backfilled=true; done++;
       }
-    }
+    } else if(e.backfilled!==true) skip_not_matured++;   // 21일 미도래(정상)
   }
-  return {done,prov,fixed,skipped};
+  return R();
 }
 
 function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). 원본 로그가 아닌 '계산된 수치'만 반환
@@ -968,7 +1007,13 @@ function render(res,log,nEval){
       <button id="expBtn" class="btn2">내보내기(JSON)</button>
       <button id="impBtn" class="btn2">불러오기</button>
       <input id="impFile" type="file" accept="application/json,.json" style="display:none">
-    </div></div>`;
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="scanBtn" class="btn2">🧹 오염 점검</button>
+      <button id="delBtn" class="btn2">🗑️ 오염 제거</button>
+      <button id="undoBtn" class="btn2">↩️ 되돌리기</button>
+    </div>
+    <div id="scanOut" class="disc" style="margin-top:8px;line-height:1.6"></div></div>`;
 
   h+=`<details><summary>📖 용어 설명 (처음이면 펼쳐보세요)</summary>
     <div class="line">• <b>점수(0~100)</b>: 높을수록 지금 사기 좋은 자리. 75+ 강함 / 60~74 조건부 / 45~59 관망 / 45미만 피함.<br>
@@ -996,13 +1041,50 @@ function render(res,log,nEval){
     const url=URL.createObjectURL(blob); const a=document.createElement("a");
     a.href=url; a.download=`swing_log_${todayUTC()}.json`;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); };
+  const SNAP=LOG_KEY+"_snapshot";
+  const snapshot=(arr)=>{ try{ localStorage.setItem(SNAP,JSON.stringify({at:new Date().toISOString(),log:arr})); return true; }catch(_){ return false; } };
+  const symList=(a)=> a.length? ` (${a.slice(0,15).join(", ")}${a.length>15?` 외 ${a.length-15}종`:""})` : "";
+  $("#scanBtn").onclick=async()=>{
+    $("#scanOut").innerHTML="점검 중…";
+    const cur=loadLog(); const vs=await krwMarketSet(); const s=scanContamination(cur,vs);
+    $("#scanOut").innerHTML=`<b>점검 결과 (dry-run · 삭제 안 함)</b> — 총 ${s.total}건<br>`
+      +`🔴 <b>확정 오염 ${s.confirmed.length}건</b>${symList(s.confirmedSyms)}<br>`
+      +`🟡 의심 ${s.suspect.length}건${symList(s.suspectSyms)} <span style="color:#7b839a">← 상폐 코인일 수 있어 자동 삭제 안 함</span><br>`
+      +`사유: ${Object.entries(s.reasons).map(([k,v])=>k+" "+v).join(" · ")||"-"}<br>`
+      +`제거 시 잔여: <b>확정만 ${s.afterRemoveConfirmed}건</b> / 확정+의심 ${s.afterRemoveBoth}건`;
+  };
+  $("#delBtn").onclick=async()=>{
+    const cur=loadLog(); const vs=await krwMarketSet(); const s=scanContamination(cur,vs);
+    if(!s.confirmed.length){ alert("확정 오염 레코드가 없습니다. (의심 "+s.suspect.length+"건은 보존)"); return; }
+    if(!confirm(`확정 오염 ${s.confirmed.length}건을 삭제합니다.\n의심 ${s.suspect.length}건은 보존(상폐 가능).\n${cur.length} → ${s.afterRemoveConfirmed}건\n\n삭제 전 자동 스냅샷 저장됩니다. 진행할까요?`)) return;
+    snapshot(cur);
+    const bad=new Set(s.confirmed.map(x=>x.e));
+    const kept=cur.filter(e=>!bad.has(e));
+    saveLog(kept);
+    alert(`삭제 완료: ${cur.length} → ${kept.length}건 (제거 ${cur.length-kept.length})\n↩️ 되돌리기로 복원 가능. [실행]을 눌러 반영하세요.`);
+    $("#scanBtn").click();
+  };
+  $("#undoBtn").onclick=()=>{
+    let snap=null; try{ snap=JSON.parse(localStorage.getItem(SNAP)||"null"); }catch(_){}
+    if(!snap||!Array.isArray(snap.log)){ alert("복원할 스냅샷이 없습니다."); return; }
+    if(!confirm(`스냅샷(${snap.at.slice(0,19).replace("T"," ")})으로 되돌립니다.\n현재 ${loadLog().length}건 → ${snap.log.length}건\n\n진행할까요?`)) return;
+    saveLog(snap.log); alert(`복원 완료: ${snap.log.length}건. [실행]을 눌러 반영하세요.`);
+  };
   $("#impBtn").onclick=()=>$("#impFile").click();
   $("#impFile").onchange=(e)=>{ const f=e.target.files[0]; if(!f) return;
     const rd=new FileReader();
-    rd.onload=()=>{ try{ const parsed=toRecords(rd.result); const inc=parsed.recs;
-      const valid=inc.filter(x=>x&&x.date&&x.symbol);
-      if(!valid.length) throw new Error(`레코드 ${inc.length}건 중 date+symbol 있는 건이 0건.\n첫 레코드 키: ${inc[0]&&typeof inc[0]==="object"?Object.keys(inc[0]).slice(0,8).join(", "):"(객체 아님)"}`);
-      const cur=loadLog(); const have=new Set(cur.map(x=>x.date+"|"+x.symbol));
+    rd.onload=async()=>{ try{ const parsed=toRecords(rd.result); const inc=parsed.recs;
+      const withKey=inc.filter(x=>x&&x.date&&x.symbol);
+      if(!withKey.length) throw new Error(`레코드 ${inc.length}건 중 date+symbol 있는 건이 0건.\n첫 레코드 키: ${inc[0]&&typeof inc[0]==="object"?Object.keys(inc[0]).slice(0,8).join(", "):"(객체 아님)"}`);
+      // ★임포트 가드: 업비트 KRW 마켓만 허용 (주식 로그 등 오염 차단)
+      const vs=await krwMarketSet();
+      const valid=withKey.filter(x=>{ const mk=mktOf(x); return MKT_RE.test(mk)&&(!vs||!vs.size||vs.has(mk)); });
+      const rej=withKey.length-valid.length;
+      if(!valid.length) throw new Error(`업비트 스윙 로그가 아닙니다. 임포트를 취소했습니다.\n(검사 ${withKey.length}건 전부 업비트 마켓 아님 · 예: ${withKey.slice(0,3).map(x=>mktOf(x)||"(마켓없음)").join(", ")})`);
+      if(rej>0&&!confirm(`총 ${withKey.length}건 중 ${valid.length}건만 업비트 마켓입니다.\n${rej}건은 거부됩니다(업비트 마켓 아님).\n\n계속할까요?`)) return;
+      const cur=loadLog();
+      try{ localStorage.setItem(LOG_KEY+"_snapshot",JSON.stringify({at:new Date().toISOString(),log:cur})); }catch(_){}
+      const have=new Set(cur.map(x=>x.date+"|"+x.symbol));
       let added=0, leg=0;
       for(const x of valid){ const key=x.date+"|"+x.symbol; if(have.has(key)) continue; have.add(key);
         if(!x.cfgVersion){   // 레거시(버전태그 없음) → 측정 전용 풀. 심볼·예측일만 사용, status/score/스탑판정 전부 폐기
@@ -1010,7 +1092,7 @@ function render(res,log,nEval){
         } else { cur.push(x); added++; }
       }
       const dup=valid.length-added-leg;
-      saveLog(cur); alert(`불러오기 완료 [형식: ${parsed.note}]\n유효 ${valid.length}건 → 일반 ${added} · 레거시(측정풀) ${leg} · 중복스킵 ${dup}\n레거시는 가격에서 재계산되며 게이트·등급성과엔 미포함.\n[실행]을 누르면 반영됩니다.`);
+      saveLog(cur); alert(`불러오기 완료 [형식: ${parsed.note}]\n검사 ${withKey.length} → 임포트 ${added+leg} (일반 ${added} · 레거시 ${leg}) · 중복 ${dup} · 거부 ${rej}\n총 ${cur.length}건. ↩️ 되돌리기로 복원 가능.\n[실행]을 누르면 반영됩니다.`);
     }catch(err){ alert("불러오기 실패: "+err.message); } };
     rd.readAsText(f); };
 }
@@ -1024,12 +1106,13 @@ async function run(){
     setStatus("이전 예측 자동 평가 중…");
     const nEval=await evaluateLog(log);
     const bf=await backfillLog(log);          // v10.1 소급 백필(무스탑수익·알파·품질지표)
-    if(bf.done) saveLog(log);
+    saveLog(log);                             // 백필 진행분 즉시 보존(중단 대비)
     const res=await build(shortlist);
     appendPredictions(log,res.rows,todayUTC());
     log=pruneLog(log);              // 평가완료 60일 초과 정리(로그 용량 관리)
     saveLog(log);
-    setProg(1); setStatus(`완료 · 후보 ${res.rows.length}개 · 평가 ${nEval}건 · 백필 확정 ${bf.done}/고정창 ${bf.fixed}/잠정 ${bf.prov} · 규칙 ${CONFIG.version}`);
+    setProg(1); setStatus(`완료 · 후보 ${res.rows.length}개 · 평가 ${nEval}건 · 백필 확정 ${bf.done}/고정창 ${bf.fixed}/잠정 ${bf.prov}`
+      +` · skip 오염 ${bf.skip_invalid_market}/미도래 ${bf.skip_not_matured}/조회실패 ${bf.skip_fetch_fail} · ${CONFIG.version}`);
     render(res,log,nEval);
   }catch(e){
     setStatus("오류: "+e.message);
