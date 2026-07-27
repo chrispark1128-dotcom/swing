@@ -100,6 +100,9 @@ const CONFIG = {
     simK:[1.0,1.5,2.0,2.5,3.0],   // Phase4 스탑 배수 시뮬(리포트 전용)
   },
   gate: { minN:10, alphaGapTh:3.0, winGapTh:10.0 },  // Phase2 튜닝 허용 게이트
+  populationLog: [       // 후보 모집단 변경 이력 — 버킷 비교 시 모집단 단절 확인용
+    "2026-07-27 quiet풀 minAbsChange(0.3%) 면제 — 24h 변동 미달 종목도 quiet 편입(ONDO 누락 재발 방지, quiet_exempt 기록)",
+  ],
 
   ind: {                 // 지표 기간
     emaFast:20, emaSlow:50, smaLong:200, rsi:14,
@@ -170,7 +173,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r22";
+$("#vtag").textContent=CONFIG.version+" · web·r23";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -364,23 +367,24 @@ function plan(a){ const P=CONFIG.plan; const p=a.p, atr_=a.atr; const sup=a.sup|
   const m=(t1-p)/2; const stop=(p-rs)>m? p-m : rs;
   const risk=p-stop; const rr1= risk>0? Math.round((t1-p)/risk*100)/100 : null;
   const rr2= risk>0? Math.round((t2-p)/risk*100)/100 : null;
-  // P0-2(A): 진입 하단이 스탑 이하로 내려가지 않게 클램프 — 스탑은 그대로(넓히기 금지), 진입 범위만 좁힘.
-  //   하단 = max(기존 하단, 스탑과 현재가의 중간) → 하단 체결 시에도 스탑폭이 상단폭의 절반 이상 확보
+  // P0-2(재수정): 스탑을 '체결가 기준' 비율로 — 어느 가격에 체결돼도 체결가 대비 동일 폭(검증된 k≈1.0, ≈−5%).
+  //   클램프 제거(하단 스탑폭이 −2.6%로 좁아져 검증 범위 밖이던 문제 해소). 진입범위는 원래대로.
+  const stopRatio=stop/p;                        // 체결가에 곱하는 비율(예 0.95)
   let elo=Math.max(sup,p-P.atrEntryLow*atr_);
-  const eloFloor=(stop+p)/2;
-  const eloClamped= elo<eloFloor;
-  if(eloClamped) elo=eloFloor;
   if(elo>p) elo=p;
-  const spLo= elo>0? (stop/elo-1)*100 : null;   // 하단 체결 시 스탑폭
-  // P0-2(B): 정합성 검사 상시 유지 — 클램프 이후에도 역전이면 플랜 무효
-  const invalid= !(elo>stop);
+  const stopLo=elo*stopRatio;                    // 하단 체결 시 스탑 / 상단 체결 시 스탑=stop
+  const spFill=(stopRatio-1)*100;                // 체결가 기준 스탑폭(전 체결가 동일)
+  const spLo=spFill;                             // 병기 호환(하단 기준 폭 = 동일 비율)
+  const eloClamped=false;
+  // P0-2(B): 정합성 검사 상시 유지 — 체결가 기준이라 구조적으로 역전 불가지만 검사는 유지
+  const invalid= !(elo>stopLo);
   let [hr,hsrc]=headroom(a); let hn;
   if(hr&&hr>=99) hn="신고가권(90일 내 매물대 없음)";
   else if(hr&&hr<10) hn=`⚠️ ${hsrc}까지 ${hr.toFixed(1)}%뿐`;
   else if(hr) hn=`${hsrc}까지 여유 ${hr.toFixed(1)}%`; else hn="";
   if(1.2*atr_>risk) hn+=" · ⚠️ 스탑<1.2×ATR 노이즈 위험(사이즈 축소)";
   if(invalid) hn+=" · ⚠️ 진입범위 하단이 스탑 이하 — 플랜 무효";
-  return {elo,ehi:p,stop,sp:(stop/p-1)*100,spLo,eloClamped,invalid,
+  return {elo,ehi:p,stop,stopLo,stopRatio,spFill,sp:(stop/p-1)*100,spLo,eloClamped,invalid,
     t1,t2,rr1:(invalid?null:rr1),rr2:(invalid?null:rr2),hn}; }
 
 function won(x){ if(x==null) return"-";
@@ -411,6 +415,7 @@ function appendPredictions(log,rows,today,regimePenRec){
       grade_at_prediction:gp,was_surge:ws,surge_type:(a.surgeType||"normal"),hard_excluded:!!u.warn,
       regime_pen:(typeof regimePenRec==="number"?regimePenRec:null),   // 예측 시점 국면감점(국면 커버리지 집계용)
       vol_ratio:(a&&a.vr!=null? a.vr : null),        // P2-2: 거래량 배수(20일 평균 대비) — 구간별 알파 리포트용
+      quiet_exempt:!!u.quietExempt,                  // P1-4: minAbsChange 면제로 편입(24h ±0.3% 미만) — 버킷 별도 집계
       score_raw:(scRaw!=null?scRaw:sc),   // B(병기): 국면감점 제외 점수 — 선별력 검증 전용, 등급표시 미사용
       score_prev:(scPrev!=null?scPrev:sc),          // [4] 수정 전 공식 재현값 — 전환기 분포 이동 측정
       score_pct:(sc/scoreMaxOf()*100),              // [신규] 만점(85) 대비 % — 임계 변경 아님, 측정 전용
@@ -773,6 +778,8 @@ function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). �
   // [주의2] 200일선 위(+10)/아래(0) 분리 — "장기추세 생존 후 조정" vs "미붕괴 하락 초입" 구분 미검증
   const s200above=astat(mAll.filter(e=>e.trend_above_s200===true));
   const s200below=astat(mAll.filter(e=>e.trend_above_s200===false));
+  // P1-4: minAbsChange 면제 편입 버킷(quiet_exempt) — 모집단 변경 효과 별도 추적
+  const quietEx=astat(mAll.filter(e=>e.quiet_exempt===true));
   // [4] 전환기 분포 이동: score_prev(옛 공식) vs score(현행) 평균 차이
   const prevPairs=mAll.filter(e=>e.score_prev!=null&&e.score!=null);
   const shift= prevPairs.length? {n:prevPairs.length,
@@ -915,7 +922,7 @@ function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). �
     mN:mAll.length, backfilled, mGrades, mExcl, mSurge, mTrend, mSpike, mNormal,
     gate, reclass, resQuad, stopDays, sim, caps, capSim, stopGap, factorAlpha, byRegime, hasMeasure:mAll.length>0,
     mGradesRaw, gateRaw, s200miss, s200have, s200above, s200below, shift, mGradesPrev, nPrevPool:prevPool.length, mGradesPct, pctCompare, rcov,
-    verdictHold, holdReason, ssSim, volBuckets, volBucketN,
+    verdictHold, holdReason, ssSim, volBuckets, volBucketN, quietEx,
     provisional:useProv, nConfirmed:cAll.length, nProv:pAll.length, avgDays, horizonCmp,
     basis: useProv? `잠정(진행중 · 평균 ${avgDays!=null?avgDays.toFixed(1):"-"}일 보유)` : chosen.label};
 }
@@ -1096,6 +1103,9 @@ function measureReport(ps){
     for(const b of ps.volBuckets) h+=`<tr><td>${b.lab}</td><td>${b.n||0}</td><td>${b.n?p(b.alpha):"-"}</td><td>${b.n?w(b.win):"-"}</td></tr>`;
     h+=`</table><div class="meta">${ps.verdictHold?`🚧 판정 보류 — ${ps.holdReason}`:"방향 단정 금지 — 데이터 확인 후 결정"} <span style="color:#7b839a">(vol_ratio는 v10.4부터 기록 — 이전 건은 미집계)</span></div>`;
   } else h+=`<div class="meta">P2-2 거래량 배수 구간: vol_ratio 기록 표본 없음(v10.4부터 기록 시작)</div>`;
+  // P1-4: 모집단 변경 이력 + quiet_exempt 버킷
+  h+=`<div class="meta"><b>모집단 변경 이력:</b> ${(CONFIG.populationLog||[]).join(" · ")||"없음"}<br>`
+    +`<b>quiet_exempt 버킷</b>(24h ±0.3% 미만 면제 편입): ${ps.quietEx&&ps.quietEx.n?`n${ps.quietEx.n} · 알파 ${p(ps.quietEx.alpha)} · 승률 ${w(ps.quietEx.win)}`:"표본 없음(2026-07-27부터 기록)"}</div>`;
   h+=`</details>`;
   return h;
 }
@@ -1234,8 +1244,12 @@ async function build(shortlist){
   const mom=[],quiet=[];
   for(const u of uni){ const t=tk[u.market]; if(!t||(t.tv||0)<SEL.minTradeValue24h) continue;
     const liq=3*Math.max(Math.log10(t.tv+1)-8,0); const pen=u.warn?8:0; const ch=t.ch24;
-    if(Math.abs(ch)<SEL.minAbsChange) continue;
-    mom.push([SEL.momentumWeight*ch+liq-pen,u,t]); if(Math.abs(ch)<=SEL.quietMaxChange) quiet.push([liq-pen,u,t]); }
+    // P1-4(승인 2026-07-27): quiet 풀은 minAbsChange 면제 — 24h ±0.3% 미만 '조용한' 종목도 quiet 경로로 편입
+    //   (ONDO 누락 재발 방지. mom 풀은 기존대로 0.3% 이상만. 면제 편입은 quiet_exempt로 기록·별도 집계)
+    const quietExempt= Math.abs(ch)<SEL.minAbsChange;
+    if(quietExempt) u.quietExempt=true;
+    if(!quietExempt) mom.push([SEL.momentumWeight*ch+liq-pen,u,t]);
+    if(Math.abs(ch)<=SEL.quietMaxChange) quiet.push([liq-pen,u,t]); }
   mom.sort((a,b)=>b[0]-a[0]); quiet.sort((a,b)=>b[0]-a[0]);
   const nMom=Math.max(Math.floor(shortlist*SEL.momShareNum/SEL.momShareDen),1); const picked=new Map();
   for(const[,u,t]of mom.slice(0,nMom)) picked.set(u.market,[u,t]);
@@ -1307,7 +1321,7 @@ function render(res,log,nEval){
         <div class="line">현재가 ${won(a.p)} · RSI ${rsiWord(a.rsi)} · MACD ${mm} · 거래량 ${a.vr!=null?a.vr.toFixed(2)+"배(20일 평균 대비)":"-"}</div>`;
     } else h+=`<div class="line">${tr} ${tn}</div>`;
     h+=`<div class="line">최근 7일 ${a.c7>=0?"+":""}${a.c7.toFixed(1)}% / 30일 ${a.c30>=0?"+":""}${a.c30.toFixed(1)}% · 큰 흐름(주봉): ${wk}</div>
-      <div class="plan">📋 <b>플랜:</b> ${won(pl.elo)}~${won(pl.ehi)}에 사서 → <b>${won(pl.stop)}(${pl.sp>=0?"+":""}${pl.sp.toFixed(1)}%)</b> 밑돌면 손절 → ${won(pl.t1)}(+10%)·${won(pl.t2)}(+20%) 익절<br>
+      <div class="plan">📋 <b>플랜:</b> ${won(pl.elo)}~${won(pl.ehi)}에 사서 → <b>체결가 ${pl.spFill.toFixed(1)}%</b>(${won(pl.stopLo)}→${won(pl.stop)}) 밑돌면 손절 → ${won(pl.t1)}(+10%)·${won(pl.t2)}(+20%) 익절<br>
         · RR(손익비) ${pl.rr1} (2 이상이면 유리)<br>
         · ${esc(pl.hn)}</div></div>`;
   });
@@ -1405,7 +1419,7 @@ function render(res,log,nEval){
       const wk=(a.w10&&a.p>=a.w10)?"주봉↑":"주봉↓";
       const [hr]=headroom(a);
       return ` ${u.symbol} ${sc} · ${String(tr||"").split(" ").pop()||"-"} · 축(추세${bd["추세"]}/모멘텀${bd["모멘텀"]}/거래량${bd["거래량"]}/셋업${bd["셋업"]}/상대강도${bd["상대강도"]}) 감점${bd["감점"]||0}\n`
-      +`   진입 ${won(pl.elo)}~${won(pl.ehi)} / 스탑 ${won(pl.stop)}${pl.invalid?" ⚠️플랜무효(하단≤스탑)":""}${pl.eloClamped?" (하단은 스탑정합 클램프)":""} / T1 ${won(pl.t1)} / T2 ${won(pl.t2)} / R:R ${pl.rr1!=null?pl.rr1:"-"} / ATR14 ${won(a.atr)}\n`
+      +`   진입 ${won(pl.elo)}~${won(pl.ehi)} / 스탑 체결가 ${pl.spFill.toFixed(1)}% (${won(pl.stopLo)}→${won(pl.stop)})${pl.invalid?" ⚠️플랜무효(하단≤스탑)":""} / T1 ${won(pl.t1)} / T2 ${won(pl.t2)} / R:R ${pl.rr1!=null?pl.rr1:"-"} / ATR14 ${won(a.atr)}\n`
       +`   RSI ${a.rsi!=null?a.rsi.toFixed(0):"-"} · MACD ${mm} · 거래량 ${a.vr!=null?a.vr.toFixed(2)+"x":"-"} · ${wk} · 저항여유 ${hr!=null?(hr>=99?"신고가권":hr.toFixed(1)+"%"):"-"}\n`
       +`   spike ${a.spikeShare!=null?nz(a.spikeShare):"-"} / res_x_trend ${a.resXTrend||"-"} / pct ${(sc/scoreMaxOf()*100).toFixed(1)}% / s200 ${s200Txt(a)} / ${u.warn?"🚨유의종목":"🚨없음"}`;
     }).join("\n") : ` 45+ 없음`)+`\n`;
