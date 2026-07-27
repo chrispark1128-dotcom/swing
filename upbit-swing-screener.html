@@ -87,13 +87,14 @@ const CONFIG = {
   // ▼ 업비트 요청이 "Failed to fetch"로 막히면(한국 IP rate limit) 아래를 본인 Cloudflare Worker 주소로 교체.
   //   예: "https://swing-proxy.chrispark1128.workers.dev/v1"  (끝에 /v1 반드시 포함)
   apiBase: "https://swing-proxy.chrispark1128.workers.dev/v1",
-  version: "v10.3",      // ← v10.3: 200일선 페이징 수정(채점 실제 변경) — 이전 버전과 점수 분포가 다름
-  // [C] 채점이 실제로 바뀌었으므로 final 기준 집계는 v10.3만. 연속성은 score_prev 기준 풀링으로 확보
-  statsCompatible: ["v10.3"],
+  version: "v10.4",      // ← v10.4: 판정 게이트 종속·진입/스탑 정합·복사요약 v3 (채점 무변경 → v10.3과 집계 풀링)
+  // [C] 채점 기준: v10.3에서 200일선 수정. v10.4는 채점 무변경이므로 함께 묶음. 연속성은 score_prev 풀링
+  statsCompatible: ["v10.3","v10.4"],
   evalWindow: 21,        // 예측 유효기간(일). 이 안에 목표/손절 안 닿으면 만료 처리
   measure: {             // v10.1 계측 설정 (측정 전용, 채점 미반영)
     window:21,             // 무스탑 보유·알파 계산 기간(일)
     fixedWindows:[5,10],   // 고정창 수익·알파(5d/10d) — 21일보다 빨리 익어 지금 확정 측정 가능
+    minHorizonDays:5,      // P0-1: 평균 보유일이 이 미만이면 모든 판정문 "보류"(숫자는 표시, 결론만 억제)
     nearResTh:0.10,        // 저항 '가깝다' 기준(10% 이내)
     spikeShareTh:0.5,      // 연속지표 재분류: 30일 상승의 절반 이상을 하루가 만들면 폭등형
     simK:[1.0,1.5,2.0,2.5,3.0],   // Phase4 스탑 배수 시뮬(리포트 전용)
@@ -169,7 +170,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r21";
+$("#vtag").textContent=CONFIG.version+" · web·r22";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -363,12 +364,24 @@ function plan(a){ const P=CONFIG.plan; const p=a.p, atr_=a.atr; const sup=a.sup|
   const m=(t1-p)/2; const stop=(p-rs)>m? p-m : rs;
   const risk=p-stop; const rr1= risk>0? Math.round((t1-p)/risk*100)/100 : null;
   const rr2= risk>0? Math.round((t2-p)/risk*100)/100 : null;
+  // P0-2(A): 진입 하단이 스탑 이하로 내려가지 않게 클램프 — 스탑은 그대로(넓히기 금지), 진입 범위만 좁힘.
+  //   하단 = max(기존 하단, 스탑과 현재가의 중간) → 하단 체결 시에도 스탑폭이 상단폭의 절반 이상 확보
+  let elo=Math.max(sup,p-P.atrEntryLow*atr_);
+  const eloFloor=(stop+p)/2;
+  const eloClamped= elo<eloFloor;
+  if(eloClamped) elo=eloFloor;
+  if(elo>p) elo=p;
+  const spLo= elo>0? (stop/elo-1)*100 : null;   // 하단 체결 시 스탑폭
+  // P0-2(B): 정합성 검사 상시 유지 — 클램프 이후에도 역전이면 플랜 무효
+  const invalid= !(elo>stop);
   let [hr,hsrc]=headroom(a); let hn;
   if(hr&&hr>=99) hn="신고가권(90일 내 매물대 없음)";
   else if(hr&&hr<10) hn=`⚠️ ${hsrc}까지 ${hr.toFixed(1)}%뿐`;
   else if(hr) hn=`${hsrc}까지 여유 ${hr.toFixed(1)}%`; else hn="";
   if(1.2*atr_>risk) hn+=" · ⚠️ 스탑<1.2×ATR 노이즈 위험(사이즈 축소)";
-  return {elo:Math.max(sup,p-P.atrEntryLow*atr_),ehi:p,stop,sp:(stop/p-1)*100,t1,t2,rr1,rr2,hn}; }
+  if(invalid) hn+=" · ⚠️ 진입범위 하단이 스탑 이하 — 플랜 무효";
+  return {elo,ehi:p,stop,sp:(stop/p-1)*100,spLo,eloClamped,invalid,
+    t1,t2,rr1:(invalid?null:rr1),rr2:(invalid?null:rr2),hn}; }
 
 function won(x){ if(x==null) return"-";
   if(x>=100) return Math.round(x).toLocaleString()+"원";
@@ -397,6 +410,7 @@ function appendPredictions(log,rows,today,regimePenRec){
       score:sc,verdict:verdict(sc),bd:Object.assign({},bd),
       grade_at_prediction:gp,was_surge:ws,surge_type:(a.surgeType||"normal"),hard_excluded:!!u.warn,
       regime_pen:(typeof regimePenRec==="number"?regimePenRec:null),   // 예측 시점 국면감점(국면 커버리지 집계용)
+      vol_ratio:(a&&a.vr!=null? a.vr : null),        // P2-2: 거래량 배수(20일 평균 대비) — 구간별 알파 리포트용
       score_raw:(scRaw!=null?scRaw:sc),   // B(병기): 국면감점 제외 점수 — 선별력 검증 전용, 등급표시 미사용
       score_prev:(scPrev!=null?scPrev:sc),          // [4] 수정 전 공식 재현값 — 전환기 분포 이동 측정
       score_pct:(sc/scoreMaxOf()*100),              // [신규] 만점(85) 대비 % — 임계 변경 아님, 측정 전용
@@ -750,8 +764,12 @@ function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). �
   for(const e of mAll){ const v=rpOf(e);
     if(v==null) rcov.unknown++; else if(v===0) rcov.on++; else if(v>=-5) rcov.mid++; else rcov.off++; }
   rcov.adjustable=(rcov.on>=CONFIG.gate.minN&&(rcov.off+rcov.mid)>=CONFIG.gate.minN);
+  // P2-3: 총 n이 임계 미만이면 "표본 부족" 우선. 총 n 충분한데 특정 국면 0이면 "편중"
+  const rcovTotal=rcov.on+rcov.mid+rcov.off;
   rcov.reason= rcov.adjustable? "배점조정 판단 가능"
-    : ((rcov.on&&(rcov.off+rcov.mid))? "⛔ 표본 부족(양쪽 각 "+CONFIG.gate.minN+" 필요)" : "⛔ 국면 편중(한쪽 0건)");
+    : (rcovTotal<CONFIG.gate.minN? `⛔ 표본 부족(총 n${rcovTotal})`
+      : ((rcov.on===0||(rcov.off+rcov.mid)===0)? "⛔ 국면 편중(한쪽 0건)"
+        : `⛔ 표본 부족(양쪽 각 ${CONFIG.gate.minN} 필요)`));
   // [주의2] 200일선 위(+10)/아래(0) 분리 — "장기추세 생존 후 조정" vs "미붕괴 하락 초입" 구분 미검증
   const s200above=astat(mAll.filter(e=>e.trend_above_s200===true));
   const s200below=astat(mAll.filter(e=>e.trend_above_s200===false));
@@ -862,11 +880,42 @@ function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). �
     return {n:a.length, cur, alt, better:alt.gap>cur.gap}; })();
   const backfilled=log.filter(e=>e.backfilled).length;
 
+  /* ═══ P0-1: 판정문 게이트 종속 — 게이트 미통과 OR 평균보유<minHorizonDays면 결론 억제(숫자는 유지) ═══ */
+  const holdHorizon= avgDays==null || avgDays<M.minHorizonDays;
+  const verdictHold= holdHorizon || !gate.ok;
+  const holdReason= verdictHold
+    ? `측정기준 ${chosen.label} · 평균 ${avgDays!=null?avgDays.toFixed(1):"-"}일 보유, ${holdHorizon?`보유 ${M.minHorizonDays}일 미만(부호가 매일 뒤집히는 노이즈 구간)`:"게이트 미통과(표본/격차 부족)"}`
+    : "";
+  if(verdictHold){
+    const hold=`🚧 판정 보류 — ${holdReason}`;
+    exclVerdict=hold+note(`(α ${mExcl.n?((mExcl.alpha>=0?"+":"")+mExcl.alpha.toFixed(1)):"-"}%p·n${mExcl.n} — 숫자는 참고, 결론 아님)`);
+    surgeVerdict=hold+note(`(추세형 ${mTrend.n?mTrend.alpha.toFixed(1):"-"}%p·n${mTrend.n} / 폭등형 ${mSpike.n?mSpike.alpha.toFixed(1):"-"}%p·n${mSpike.n})`);
+    if(stopDays.n) stopDays.verdict=`🚧 판정 보류 — ${holdReason}`;
+  }
+  /* ═══ P2-1: spike_share 임계 시뮬 — 현행 0.5 vs 사분위(p75) 재분류 비교 (라벨만, 채점 미반영) ═══ */
+  const ssArr=mAll.filter(e=>e.was_surge&&e.spike_share!=null);
+  let ssSim=null;
+  if(ssArr.length>=4){
+    const sv=ssArr.map(e=>e.spike_share).sort((a,b)=>a-b);
+    const qv=(p2)=>sv[Math.min(sv.length-1,Math.floor(p2*sv.length))];
+    const mkSplit=(th)=>{ const tr=astat(ssArr.filter(e=>e.spike_share<th)), sp=astat(ssArr.filter(e=>e.spike_share>=th));
+      return {th, trend:tr, spike:sp, gap:(tr.n&&sp.n)? tr.alpha-sp.alpha : null}; };
+    ssSim={n:ssArr.length, p25:qv(.25), p50:qv(.5), p75:qv(.75),
+      cur:mkSplit(M.spikeShareTh), alt:mkSplit(qv(.75))};
+    if(ssSim.cur.gap!=null&&ssSim.alt.gap!=null) ssSim.better= Math.abs(ssSim.alt.gap)>Math.abs(ssSim.cur.gap);
+  }
+  /* ═══ P2-2: 거래량 배수 구간별 알파 (리포트만 — 고배수 마이너스면 상한 캡 검토 근거) ═══ */
+  const vrBins=[["<1.2x",0,1.2],["1.2~2x",1.2,2],["2~3x",2,3],["3~5x",3,5],["5x+",5,1e9]];
+  const volBuckets=vrBins.map(([lab,lo,hi])=>Object.assign({lab},
+    astat(mAll.filter(e=>e.vol_ratio!=null&&e.vol_ratio>=lo&&e.vol_ratio<hi))));
+  const volBucketN=volBuckets.reduce((x,b)=>x+(b.n||0),0);
+
   return {curV, compat:[...COMPAT], n:ev.length, pend, grades, excl, surge, exclTrend, exclSpike, exclNormal,
     exclVerdict, surgeVerdict, guard, hasData:ev.length>0,
     mN:mAll.length, backfilled, mGrades, mExcl, mSurge, mTrend, mSpike, mNormal,
     gate, reclass, resQuad, stopDays, sim, caps, capSim, stopGap, factorAlpha, byRegime, hasMeasure:mAll.length>0,
     mGradesRaw, gateRaw, s200miss, s200have, s200above, s200below, shift, mGradesPrev, nPrevPool:prevPool.length, mGradesPct, pctCompare, rcov,
+    verdictHold, holdReason, ssSim, volBuckets, volBucketN,
     provisional:useProv, nConfirmed:cAll.length, nProv:pAll.length, avgDays, horizonCmp,
     basis: useProv? `잠정(진행중 · 평균 ${avgDays!=null?avgDays.toFixed(1):"-"}일 보유)` : chosen.label};
 }
@@ -880,11 +929,18 @@ function poolReport(log){
   // P2: 창 선택 — 21일 확정이 부족하면 10일·5일 고정창 시뮬로 대체(만기 도래분이 많아 n>0)
   const WINS=[{key:"21d",sim:"sim",days:"simDays",btc:e=>e.btc_ret_21d,label:`21일`}]
     .concat((M.fixedWindows||[]).slice().sort((a,b)=>b-a).map(N=>({key:N+"d",sim:"sim"+N,days:"sim"+N+"Days",btc:(e)=>e["simBtc"+N],label:`${N}일 고정창`})));
-  let W=null, pool=[];
-  for(const w of WINS){ const p=cand.filter(e=>e[w.sim]&&w.btc(e)!=null);
-    if(p.length>=CONFIG.gate.minN){ W=w; pool=p; break; }
-    if(p.length>pool.length){ W=w; pool=p; } }
-  if(!pool.length) return null;
+  // P1-2: 창별 표본을 전부 집계해 병기하고, 채택은 "표본 수 최대" 창 (창 전환으로 n이 급감하는 걸 드러냄)
+  const winStats=WINS.map(w=>{ const p2=cand.filter(e=>e[w.sim]&&w.btc(e)!=null);
+    let k1=null;
+    if(p2.length){ const key="k"+M.simK[0]; const a=p2.filter(e=>e[w.sim][key]!=null);
+      if(a.length){ const dd=a.filter(e=>e[w.days]&&e[w.days][key]!=null).length;
+        k1={alpha:mean(a.map(e=>e[w.sim][key]-w.btc(e)))*100, stopHit:dd/a.length*100}; } }
+    return {w, n:p2.length, pool:p2, k1}; });
+  const bestWin=winStats.slice().sort((a,b)=>b.n-a.n)[0];
+  if(!bestWin||!bestWin.n) return null;
+  const W=bestWin.w, pool=bestWin.pool;
+  const winCmp=winStats.map(s=>({label:s.w.label, n:s.n, chosen:s.w===W,
+    k1alpha:s.k1?s.k1.alpha:null, k1hit:s.k1?s.k1.stopHit:null}));
   const nLeg=pool.filter(isLegacyRec).length;
   // 스탑배수 시뮬 (k×ATR14): 무스탑수익·알파·승률·스탑아웃률·평균 도달일수
   const stopSim=M.simK.map(k=>{ const key="k"+k; const a=pool.filter(e=>e[W.sim][key]!=null); if(!a.length) return {k,n:0};
@@ -893,9 +949,14 @@ function poolReport(log){
       win:a.filter(e=>(e[W.sim][key]-W.btc(e))>0).length/a.length*100,
       stopHit:dd.length/a.length*100, avgDays:mean(dd)}; });
   const best=stopSim.filter(s=>s.n).slice().sort((a,b)=>b.alpha-a.alpha)[0];
-  // 변동성 구간별 스탑 도달일수 (표준 스탑 k=2 기준) — 풀링하지 않고 분리
-  const vb=[["저변동 <3%",0,3],["중변동 3~6%",3,6],["고변동 ≥6%",6,1e9]];
+  // P1-3: 변동성 구간을 실제 btc_vol_30d 분포의 삼분위로 동적 재설정 (고정 3%/6% 임계는 전량 저변동에 몰림)
   const kStd="k"+(M.simK.includes(2)?2:M.simK[Math.floor(M.simK.length/2)]);
+  const volVals=pool.filter(e=>e.btc_vol_30d!=null).map(e=>e.btc_vol_30d).sort((a,b)=>a-b);
+  const vq=(p2)=> volVals.length? volVals[Math.min(volVals.length-1,Math.floor(p2*volVals.length))] : null;
+  const t1v=vq(1/3), t2v=vq(2/3);
+  const vb= volVals.length>=3
+    ? [[`저변동 <${t1v.toFixed(2)}`,0,t1v],[`중변동 ${t1v.toFixed(2)}~${t2v.toFixed(2)}`,t1v,t2v],[`고변동 ≥${t2v.toFixed(2)}`,t2v,1e9]]
+    : [["저변동",0,1e9],["중변동",1e9,1e9],["고변동",1e9,1e9]];
   const byVol=vb.map(([lab,lo,hi])=>{ const a=pool.filter(e=>e.btc_vol_30d!=null&&e.btc_vol_30d>=lo&&e.btc_vol_30d<hi&&e[W.days]&&e[W.days][kStd]!=null);
     const d=a.map(e=>e[W.days][kStd]);
     return {lab,n:a.length, pct1_3:d.length?d.filter(x=>x<=3).length/d.length*100:null, avg:mean(d)}; });
@@ -903,7 +964,7 @@ function poolReport(log){
   const ss=pool.filter(e=>e.spike_share!=null).map(e=>e.spike_share).sort((a,b)=>a-b);
   const q=(p)=> ss.length? ss[Math.min(ss.length-1,Math.floor(p*ss.length))] : null;
   const quality={n:ss.length, p25:q(.25), p50:q(.5), p75:q(.75), spikeHeavy: ss.length? ss.filter(x=>x>=M.spikeShareTh).length/ss.length*100 : null};
-  return {n:pool.length, nLeg, nV10:pool.length-nLeg, kStd, stopSim, best, byVol, quality, winLabel:W.label};
+  return {n:pool.length, nLeg, nV10:pool.length-nLeg, kStd, stopSim, best, byVol, quality, winLabel:W.label, winCmp};
 }
 
 function measureReport(ps){
@@ -944,10 +1005,14 @@ function measureReport(ps){
       +row3("200일선 <b>아래</b>",sb,"0")
       +row3("미확보(신규상장 등)",sm,"+5 폴백")
       +`</table>`;
-    const notes=[];
-    if(sa&&sa.n&&sb&&sb.n) notes.push(sa.alpha>sb.alpha? "200일선 위가 더 나음 — +10 가점에 부합" : "⚠️ 200일선 위가 더 나쁨 — +10 가점이 역방향일 가능성");
-    if(sm&&sm.n&&sa&&sa.n) notes.push(sm.alpha<Math.min(sa.alpha,sb&&sb.n?sb.alpha:sa.alpha)? "⚠️ 미확보 버킷 최악 — 폴백 +5 재검토 후보" : "미확보 버킷이 최악은 아님");
-    h+=`<div class="meta">${notes.join(" · ")||"표본 부족"} <span style="color:#7b839a">(판단 보류, 관찰 지속)</span></div>`;
+    if(ps.verdictHold){   // P0-1: 보류 시 방향 단정 억제
+      h+=`<div class="meta">🚧 판정 보류 — ${ps.holdReason} <span style="color:#7b839a">(숫자만 표시, 방향 단정 금지)</span></div>`;
+    } else {
+      const notes=[];
+      if(sa&&sa.n&&sb&&sb.n) notes.push(sa.alpha>sb.alpha? "200일선 위가 더 나음 — +10 가점에 부합" : "⚠️ 200일선 위가 더 나쁨 — +10 가점이 역방향일 가능성");
+      if(sm&&sm.n&&sa&&sa.n) notes.push(sm.alpha<Math.min(sa.alpha,sb&&sb.n?sb.alpha:sa.alpha)? "⚠️ 미확보 버킷 최악 — 폴백 +5 재검토 후보" : "미확보 버킷이 최악은 아님");
+      h+=`<div class="meta">${notes.join(" · ")||"표본 부족"} <span style="color:#7b839a">(판단 보류, 관찰 지속)</span></div>`;
+    }
   }
   // [C] score_prev 기준 전 기간 풀링 — 버전 분리에도 연속 추적
   if(ps.mGradesPrev&&ps.mGradesPrev.some(g=>g.n)){
@@ -1011,9 +1076,26 @@ function measureReport(ps){
     h+=`<div class="meta"><b>75점 재채점 시뮬</b>(거래량·셋업 제외) — 상·하위 25%(각 n${cs2.cur.q}) 알파 격차<br>
       현재 100점: 상위 ${g(cs2.cur.top)} vs 하위 ${g(cs2.cur.bot)} → <b>격차 ${g(cs2.cur.gap)}</b><br>
       75점(2축 제외): 상위 ${g(cs2.alt.top)} vs 하위 ${g(cs2.alt.bot)} → <b>격차 ${g(cs2.alt.gap)}</b><br>
-      → ${cs2.better?"⚠️ 2축 제외 시 변별력이 <b>커짐</b> — 캡 포화가 변별력을 깎고 있을 가능성":"2축 제외 시 변별력이 줄어듦 — 두 축이 기여 중"}
+      → ${ps.verdictHold? `🚧 판정 보류 — ${ps.holdReason}` : (cs2.better?"⚠️ 2축 제외 시 변별력이 <b>커짐</b> — 캡 포화가 변별력을 깎고 있을 가능성":"2축 제외 시 변별력이 줄어듦 — 두 축이 기여 중")}
       <span style="color:#7b839a">(리포트일 뿐, 채점은 그대로)</span></div>`;
   } else h+=`<div class="meta">75점 재채점 시뮬: 표본 부족(n${cs2?cs2.n||0:0})</div>`;
+  // P2-1: spike_share 임계 시뮬 (현행 0.5 vs 사분위 p75 — 라벨만, 채점 미반영)
+  const s5=ps.ssSim;
+  if(s5){
+    const g2=(v)=> v==null?"-":((v>=0?"+":"")+v.toFixed(1)+"%p");
+    h+=`<div class="line" style="margin-top:12px"><b>P2-1 spike_share 임계 시뮬</b> <span style="color:#7b839a">(n${s5.n} · 사분위 ${s5.p25.toFixed(2)}/${s5.p50.toFixed(2)}/${s5.p75.toFixed(2)} · 채점 미반영)</span></div>`;
+    h+=`<table><tr><th>임계</th><th>추세형 n·α</th><th>폭등형 n·α</th><th>격차(추세−폭등)</th></tr>`;
+    const srow=(lab,sp)=>`<tr><td>${lab}</td><td>n${sp.trend.n||0}·${sp.trend.n?g2(sp.trend.alpha):"-"}</td><td>n${sp.spike.n||0}·${sp.spike.n?g2(sp.spike.alpha):"-"}</td><td><b>${sp.gap!=null?g2(sp.gap):"-"}</b></td></tr>`;
+    h+=srow(`현행 ${s5.cur.th.toFixed(2)}`,s5.cur)+srow(`사분위 p75=${s5.alt.th.toFixed(2)}`,s5.alt)+`</table>`;
+    h+=`<div class="meta">${ps.verdictHold? `🚧 판정 보류 — ${ps.holdReason}` : (s5.better!=null? (s5.better?"사분위 임계가 격차를 더 벌림 — 재분류 검토 근거":"현행 임계가 격차 유지 — 변경 근거 없음") : "격차 비교 표본 부족")} <span style="color:#7b839a">(분류 라벨만 영향)</span></div>`;
+  }
+  // P2-2: 거래량 배수 구간별 알파 (역방향+포화+경보충돌 조사 — 리포트만)
+  if(ps.volBucketN){
+    h+=`<div class="line" style="margin-top:12px"><b>P2-2 거래량 배수 구간별 알파</b> <span style="color:#7b839a">(n${ps.volBucketN} · 고배수 마이너스면 상한 캡 검토 근거 · 채점 미반영)</span></div>`;
+    h+=`<table><tr><th>배수</th><th>n</th><th>알파</th><th>승률</th></tr>`;
+    for(const b of ps.volBuckets) h+=`<tr><td>${b.lab}</td><td>${b.n||0}</td><td>${b.n?p(b.alpha):"-"}</td><td>${b.n?w(b.win):"-"}</td></tr>`;
+    h+=`</table><div class="meta">${ps.verdictHold?`🚧 판정 보류 — ${ps.holdReason}`:"방향 단정 금지 — 데이터 확인 후 결정"} <span style="color:#7b839a">(vol_ratio는 v10.4부터 기록 — 이전 건은 미집계)</span></div>`;
+  } else h+=`<div class="meta">P2-2 거래량 배수 구간: vol_ratio 기록 표본 없음(v10.4부터 기록 시작)</div>`;
   h+=`</details>`;
   return h;
 }
@@ -1064,9 +1146,10 @@ function perfStats(log){
   // P5: 팩터 진단 알파 기준 + 국면별 분리 (기록·관찰만, 배점 변경 없음)
   if(psm.factorAlpha&&psm.factorAlpha.length){
     const fa=(v)=>((v>=0?"+":"")+v.toFixed(1)+"%p");
-    h+=`<div class="line" style="margin-top:10px"><b>★ 팩터 진단 — 알파 기준</b> <span style="color:#7b839a">(음수 격차 = 역방향)</span></div>`;
+    const fHold=psm.verdictHold;   // P0-1: 보류 시 역방향 단정 억제(숫자만)
+    h+=`<div class="line" style="margin-top:10px"><b>★ 팩터 진단 — 알파 기준</b> <span style="color:#7b839a">${fHold?`(🚧 판정 보류 — ${psm.holdReason} · 숫자만 표시)`:"(음수 격차 = 역방향)"}</span></div>`;
     h+=`<table><tr><th>축</th><th>n(≥/&lt;)</th><th>충족 알파</th><th>미달 알파</th><th>격차</th></tr>`;
-    for(const f of psm.factorAlpha) h+=`<tr${f.gap<0?' style="background:#3a1720"':''}><td>${f.k}≥${f.thr}</td><td>${f.nHi}/${f.nLo}</td><td>${fa(f.aHi)}</td><td>${fa(f.aLo)}</td><td><b>${fa(f.gap)}</b>${f.gap<0?" ⚠️역방향":""}</td></tr>`;
+    for(const f of psm.factorAlpha) h+=`<tr${(!fHold&&f.gap<0)?' style="background:#3a1720"':''}><td>${f.k}≥${f.thr}</td><td>${f.nHi}/${f.nLo}</td><td>${fa(f.aHi)}</td><td>${fa(f.aLo)}</td><td><b>${fa(f.gap)}</b>${(!fHold&&f.gap<0)?" ⚠️역방향":""}</td></tr>`;
     h+=`</table>`;
     for(const rg of (psm.byRegime||[])){ if(!rg.f.length) continue;
       h+=`<div class="meta">${rg.rg==="risk_off"?"🔴 리스크오프":"🟢 리스크온"} (n${rg.n}): ${rg.f.map(f=>`${f.k} ${fa(f.gap)}`).join(" · ")}</div>`; }
@@ -1103,6 +1186,10 @@ function poolReportHTML(log){
   const w=(v)=> v==null?"-":v.toFixed(0)+"%";
   const d=(v)=> v==null?"-":v.toFixed(1)+"일";
   let h=`<details open><summary style="color:#7fb0ff;font-weight:800">🧪 측정 전용 풀 — 스탑배수 시뮬 [${pr.winLabel}] (레거시 ${pr.nLeg} + v10 ${pr.nV10} = ${pr.n}건)</summary>`;
+  if(pr.winCmp){   // P1-2: 창 전환으로 표본이 급감해도 드러나도록 창별 병기
+    h+=`<div class="meta"><b>창별 표본 병기</b> (▶=채택, 기준: 표본 최대): `
+      +pr.winCmp.map(c=>`${c.chosen?"▶":""}${c.label} n${c.n}${c.k1alpha!=null?` k1.0 α${(c.k1alpha>=0?"+":"")+c.k1alpha.toFixed(1)}%·피격${c.k1hit.toFixed(0)}%`:""}`).join(" / ")+`</div>`;
+  }
   h+=`<div class="meta">⚠️ 레거시는 <b>스크리너가 뽑은 후보군 표본이지 전체 시장 표본이 아님</b>(선택편향 존재). 가격에서 재계산(v7 스탑판정 무시)했고 <b>등급성과·게이트엔 미포함</b>. 스탑배수·질지표 등 가격기반 분석 전용.</div>`;
   h+=`<div class="line"><b>스탑배수 시뮬 (k×ATR14)</b> — 알파 최댓값 k가 최적 후보</div>`;
   h+=`<table><tr><th>k</th><th>n</th><th>평균수익</th><th>알파</th><th>승률</th><th>스탑피격</th><th>평균도달일</th></tr>`;
@@ -1237,7 +1324,11 @@ function render(res,log,nEval){
   const regShort= regimePen===0?"🟢 리스크온":(regimePen>=-5?"🟡 중립":"🔴 리스크오프");
   const flagTxt= (flags&&flags.length)?flags.join(" · "):"없음";
   const btcTxt= btc7==null?"-":(btc7>=0?"+":"")+btc7.toFixed(1)+"%";
-  const detail=rows.map(x=>`${x[4].symbol}${x[4].warn?"🚨":""}(${x[0]}${svW(x[0])},7d${c7f(x[2])})`).join(" · ");
+  // P1-1(b): 30일 수익·주봉 방향·거래량 배수 추가 (7일만으로는 그림이 반대로 보임 — 예: XEC 7d−19.5%/30d+36.6%)
+  const c30f=(x)=>x.c30!=null?`${x.c30>=0?"+":""}${x.c30.toFixed(0)}%`:"-";
+  const detail=rows.map(x=>{ const a=x[2];
+    const wk=(a.w10&&a.p>=a.w10)?"주봉↑":"주봉↓";
+    return `${x[4].symbol}${x[4].warn?"🚨":""}(${x[0]}${svW(x[0])},7d${c7f(a)},30d${c30f(a)},${wk},거래${a.vr!=null?a.vr.toFixed(2)+"x":"-"})`; }).join(" · ");
   const psum=perfSummary(log);   // 성과 통계(계산된 요약만, 원본 로그 미포함)
   let perfBlock;
   if(!psum.hasData){ perfBlock=`[성과] 아직 평가 완료 없음·대기 ${psum.pend}건\n`; }
@@ -1296,24 +1387,41 @@ function render(res,log,nEval){
   }
   const pr=poolReport(log); let poolLine="";
   if(pr&&pr.best){ const ss=pr.stopSim.filter(s=>s.n).map(s=>`k${s.k.toFixed(1)} α${(s.alpha>=0?"+":"")+s.alpha.toFixed(1)}%·피격${s.stopHit.toFixed(0)}%`).join(" / ");
-    poolLine=`[측정풀·${pr.winLabel}] 레거시${pr.nLeg}+v10 ${pr.nV10} · 스탑배수시뮬(k×ATR): ${ss} · 최적 k${pr.best.k.toFixed(1)}\n`; }
-  // [플랜] 45점 이상 후보만 (없으면 "45+ 없음") — 진입 논의에 필요한 가격·플랜 일괄 제공
+    // P1-2: 창별 표본 병기 — 창 전환으로 n이 급감해도 드러나게
+    const wc=(pr.winCmp||[]).map(c=>`${c.chosen?"▶":""}${c.label} n${c.n}${c.k1alpha!=null?` k1.0 α${(c.k1alpha>=0?"+":"")+c.k1alpha.toFixed(1)}%`:""}`).join(" / ");
+    poolLine=`[측정풀] ${wc} (채택기준: 표본 최대)\n 채택 ${pr.winLabel}: ${ss} · 최적 k${pr.best.k.toFixed(1)}\n`; }
+  // P1-1(a): [경보] — 점수 무관 전 후보의 시장경보 (없으면 "없음")
+  const alertList=rows.filter(x=>x[4].warn||x[4].caution)
+    .map(x=> x[4].warn? `${x[4].symbol}(투자유의🚨)` : `${x[4].symbol}(${(x[4].cautionReasons&&x[4].cautionReasons.length?x[4].cautionReasons.join("·"):"주의")})`);
+  const alertBlock=`[경보] ${alertList.length?alertList.join(" · "):"없음"}\n`;
+  // P1-1(e): [제외] 데이터부족/신규상장
+  const exclLine= skipped&&skipped.length? `[제외] 데이터부족/신규상장: ${skipped.join(", ")}\n` : "";
+  // [플랜] 45점 이상 후보만 (없으면 "45+ 없음") — P1-1(c) 확장: 축·티어·진입범위·RSI·MACD·거래량·주봉·저항여유
   const planRows=rows.filter(x=>x[0]>=45);
   const nz=(v,d)=> v==null?"-":(+v).toFixed(d==null?2:d);
   const s200Txt=(a)=> a.s200Missing? "미확보(신규상장)" : (a.s200Above? "위":"아래");
-  const planBlock=`[플랜]\n`+(planRows.length? planRows.map(([sc,bd,a,pl,u])=>
-      ` ${u.symbol} 현재가 ${won(a.p)} / 스탑 ${won(pl.stop)} / T1 ${won(pl.t1)} / T2 ${won(pl.t2)}`
-      +` / R:R ${pl.rr1!=null?pl.rr1:"-"} / ATR14 ${won(a.atr)} / spike ${a.spikeShare!=null?nz(a.spikeShare):"-"}`
-      +` / res_x_trend ${a.resXTrend||"-"} / ${u.warn?"🚨유의종목":"🚨없음"}`
-      +` / pct ${(sc/scoreMaxOf()*100).toFixed(1)}% / s200 ${s200Txt(a)} / bars ${a.barCount!=null?a.barCount:"-"}`).join("\n")
-    : ` 45+ 없음`)+`\n`;
+  const planBlock=`[플랜]\n`+(planRows.length? planRows.map(([sc,bd,a,pl,u,tr])=>{
+      const mm=(a.macd!=null&&a.sig!=null&&a.macd>a.sig)?"골든":"데드";
+      const wk=(a.w10&&a.p>=a.w10)?"주봉↑":"주봉↓";
+      const [hr]=headroom(a);
+      return ` ${u.symbol} ${sc} · ${String(tr||"").split(" ").pop()||"-"} · 축(추세${bd["추세"]}/모멘텀${bd["모멘텀"]}/거래량${bd["거래량"]}/셋업${bd["셋업"]}/상대강도${bd["상대강도"]}) 감점${bd["감점"]||0}\n`
+      +`   진입 ${won(pl.elo)}~${won(pl.ehi)} / 스탑 ${won(pl.stop)}${pl.invalid?" ⚠️플랜무효(하단≤스탑)":""}${pl.eloClamped?" (하단은 스탑정합 클램프)":""} / T1 ${won(pl.t1)} / T2 ${won(pl.t2)} / R:R ${pl.rr1!=null?pl.rr1:"-"} / ATR14 ${won(a.atr)}\n`
+      +`   RSI ${a.rsi!=null?a.rsi.toFixed(0):"-"} · MACD ${mm} · 거래량 ${a.vr!=null?a.vr.toFixed(2)+"x":"-"} · ${wk} · 저항여유 ${hr!=null?(hr>=99?"신고가권":hr.toFixed(1)+"%"):"-"}\n`
+      +`   spike ${a.spikeShare!=null?nz(a.spikeShare):"-"} / res_x_trend ${a.resXTrend||"-"} / pct ${(sc/scoreMaxOf()*100).toFixed(1)}% / s200 ${s200Txt(a)} / ${u.warn?"🚨유의종목":"🚨없음"}`;
+    }).join("\n") : ` 45+ 없음`)+`\n`;
   const gapTxt= btcMa50Gap==null?"-":((btcMa50Gap>=0?"+":"")+btcMa50Gap.toFixed(1)+"%");
   const volTxt= btcVol30==null?"-":btcVol30.toFixed(1);
+  // P1-1(f): [성과] 규모 — 타버전(집계 제외분) 평가/대기 카운트
+  const otherRecs=log.filter(e=>!e.synthetic&&!(CONFIG.statsCompatible||[]).includes(e.cfgVersion||"")&&e.date);
+  const otherEv=otherRecs.filter(e=>["stop","t1","t2","expire"].includes(e.status)).length;
+  const otherPd=otherRecs.filter(e=>e.status==="pending").length;
+  const scaleLine=` 규모: ${CONFIG.version} 평가${psum.n}/대기${psum.pend} · 타버전 ${otherRecs.length}건(평가${otherEv}/대기${otherPd}) · 누적 ${log.length}건\n`;
   const copytext=`[기준] ${nows} · 규칙 ${CONFIG.version} · 후보 ${rows.length}개\n`
     +`[심볼] ${syms}\n[종목명] ${names}\n`
-    +`[국면] ${regShort} · BTC7일 ${btcTxt} · BTC 50일선이격 ${gapTxt} · BTC변동성(30d) ${volTxt} · 켜진신호: ${flagTxt}\n`
-    +`[상세] ${detail}\n${planBlock}${perfBlock}${diagBlock}${poolLine}`
-    +`→ 업비트 스윙 후보야. [상세]숫자=총점,🚨=유의종목(진입금지). [플랜]은 45+ 후보의 가격·트레이드플랜. [성과]는 알파(무스탑·BTC대비) 기준 자기검증 통계 — 실현수익은 스탑에 절단된 값이라 참고용. 동향 조사 + (성과 있으면)거르기 로직 유효성 판단 도와줘.`;
+    +`[국면] ${regShort} · BTC7일 ${btcTxt} · BTC 50일선이격 ${gapTxt} · BTC변동성(30d) ${volTxt} · 켜진신호: ${flagTxt} (전 후보 ${regimePen})\n`
+    +alertBlock
+    +`[상세] ${detail}\n`+exclLine+planBlock+perfBlock+scaleLine+diagBlock+poolLine
+    +`→ 업비트 스윙 후보야. [상세]숫자=총점,🚨=유의종목(진입금지). [경보]는 점수 무관 전 후보의 업비트 시장경보. [플랜]은 45+ 후보의 가격·트레이드플랜(진입범위 포함). [성과]는 알파(무스탑·BTC대비) 기준 자기검증 통계 — 실현수익은 스탑에 절단된 값이라 참고용. 판정문이 "보류"면 결론 내리지 말 것. 동향 조사 + (성과 있으면)거르기 로직 유효성 판단 도와줘.`;
   h+=`<div class="copybox"><b>📋 클로드에 넘길 요약</b>
     <textarea id="cpb" readonly>${esc(copytext)}</textarea>
     <button id="copyBtn">복사</button>
