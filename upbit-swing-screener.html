@@ -177,7 +177,7 @@ const UP=CONFIG.apiBase;
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r24";
+$("#vtag").textContent=CONFIG.version+" · web·r25";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -1354,6 +1354,14 @@ async function build(shortlist){
   for(const[,u,t]of mom.slice(nMom)){ if(picked.size>=shortlist) break; if(!picked.has(u.market)) picked.set(u.market,[u,t]); }
   // §2-3 워치 pinning: 직전 N회 실행 중 1회라도 45+였던 종목은 필터 미달·랭킹컷이어도 스캔에 포함
   let watchHist=[]; try{ watchHist=JSON.parse(localStorage.getItem("swing_watch_history")||"[]"); }catch(_){}
+  // 부트스트랩: 이력이 비면(r24 첫 실행) 예측 로그의 최근 N개 날짜 45+로 초기화 — 구버전 실행분도 워치로 인정
+  if(!watchHist.length){
+    try{ const lg=loadLog();
+      const real=lg.filter(e=>e&&!e.synthetic&&e.pool!=="legacy"&&e.date&&e.score!=null);
+      const dates=[...new Set(real.map(e=>e.date))].sort().slice(-SEL.watchRuns);
+      watchHist=dates.map(d=>real.filter(e=>e.date===d&&e.score>=45).map(e=>e.symbol));
+    }catch(_){}
+  }
   const watchSyms=new Set([].concat(...watchHist));
   for(const sym of watchSyms){
     const u=uni.find(x=>x.symbol===sym); if(!u||picked.has(u.market)) continue;
