@@ -180,7 +180,7 @@ const UP=CONFIG.apiBase;
    결과 산출 전에 고정. 불리한 표본을 이유로 한 사후 변경은 레드팀 최우선
    구조결함 판정 대상. 변경 시 사유 문서화 + 이력 기록.
    ═══════════════════════════════════════════════════════════════════════ */
-const PROTOCOL={version:"v10.6", fixedDate:"2026-08-04", text:
+const PROTOCOL_OLD={version:"v10.6(폐기)", fixedDate:"2026-08-04", text:
 `[측정 프로토콜 v10.6 · 확정 2026-08-04]
 0-1 관측단위·클러스터: 행=코인×실행회차. 에피소드=동일 코인 연속 예측 중 10일 보유창 겹침 구간.
     클러스터=①코인×에피소드 ②날짜블록(21일 비중첩) ③국면 에피소드(신호 전환일 기준).
@@ -207,11 +207,46 @@ const PROTOCOL={version:"v10.6", fixedDate:"2026-08-04", text:
 0-7 리스크: 회당 1% 고정. 소액 0.5%=직전 3회 연속 45+ AND 첫 진입(자격 충족 시 자동, 재량 불가).
     동시 오픈리스크 합산 3% 상한. 초과 시 우선순위=점수→spike_share 낮은 순→거래대금 큰 순.
     계획 리스크 vs 실체결 손실(갭 포함) 기록.`,
-  changeLog:[]};   // 프로토콜 변경 시 {date, reason, diff} push — 사후 변경 이력
+  changeLog:[{date:"2026-08-05",reason:"§0 전면 폐기 — 확정본 측정프로토콜_v10.6a-rc9-2.md가 대체(GPT 레드팀 9라운드 통과)"}]};
+
+/* ═══════════════════════════════════════════════════════════════════════
+   📜 측정 프로토콜 정본 = 측정프로토콜_v10.6a-rc9-2.md (외부 파일)
+   본 상수는 참조·핵심 요약만 담는다. 정의 충돌 시 항상 외부 정본 파일이 우선.
+   발효 조건: §9 release manifest [A] 외부 고정 완료 (앱의 Manifest 생성 버튼 → GitHub 커밋)
+   ═══════════════════════════════════════════════════════════════════════ */
+const PROTOCOL={version:"v10.6a-rc9-2", fixedDate:"2026-08-05", canonicalFile:"측정프로토콜_v10.6a-rc9-2.md",
+  releaseId:null,   // §9[A]: manifest 생성 시 발급·기입
+  text:
+`[측정 프로토콜 v10.6a-rc9-2 · 확정 2026-08-05 · 정본=측정프로토콜_v10.6a-rc9-2.md]
+※ 본 요약은 참조용. 정의 충돌 시 정본 파일 우선. 발효=§9 manifest [A] 외부 고정 후.
+§1 시장: 업비트 KRW · 벤치마크 KRW-BTC(후보 제외) · 앵커 2026-07-01 09:00 KST.
+   이력 연결 키=market_instance_id(재상장·스왑=별개, 심볼 동일해도 미연결).
+   판정=완성 캔들만(candle_close_time 기준, 진행 캔들 전부 제외). pending=end* 미도래.
+§2 블록: 앵커 기준 21일 반개구간(스탑 전용 42일+21일 엠바고). end*=스크리닝 D0+10/플랜 발행+7/스탑 진입+21.
+   에피소드=end* 창 겹침 추이적 폐포, 대표=signal_time 최소. 처리 9단계 순서 고정.
+   m_both=유효 대표가 test·control 각 1+ 블록 수. 부트스트랩 B=20,000·시드 20260804·순서통계량(보간 금지).
+§3 지표: 수익창 D0종가→D+10종가(캘린더·이월 마크). β̂=앵커 T 이전 91개 마크가격→90 일수익률 OLS(절편 포함,
+   T 당일 미포함). β유효=91가격 존재·유한·양수 AND BTC 분산>0. resid=R−β̂R_BTC, resid≤0=패배.
+   집계=에피소드 1표. 1차=10일 잔차 승률/2차=잔차 평균/절대수익=원수익 별도.
+§4 플랜: 유효 [발행,+7일). τ=발행 후 저가≤L 첫 봉. q=τ 이후 1~3봉 중 양봉∧종가>L∧량(q)>량(τ) 첫 봉.
+   C_event_shadow=취소 무관 발행+7일까지의 Cq. B(t)=KRW-BTC 완성봉 종가>BTC_MA50(당일 포함 50봉 SMA)
+   연속 2일(NA=진입불가·별도). A0=발행 score≥60. 진입=Aq∧Bq∧Cq, 진입가(이론)=실행창[q,+2일) 첫 캔들 시가.
+   pre_confirm_fill=게이트·스탑 표본 제외 별도 태그.
+§5 계층: eligible→theoretical_enterable→stop_pair_sample. no_candle 분모 제외+비율 보고. slippage_bp.
+§6 스탑: 기준 -5% vs k∈{1.0,0.5,0.75}×ATR14(q봉, Wilder, instance 최초 14TR 시드). T1=+10% 전량. 보유 21일.
+   봉별 1~4단계(스탑 우선)+만기 time exit. R_net=비용(f 0.05%×2·ℓ L1 0.1%/L2 0.3%/L3 0.5%, 티어 기준일=q) 반영.
+   판정=α*=0.05/3 단측 98.333% 하한: L_ΔW>0 ∧ L_Δμ≥−0.003 ∧ L_ΔCVaR≥−0.005. m_pair_time≥10 ∧ N_pair≥60 최초 충족 시 1회.
+§7 튜닝 게이트=m_both≥10 ∧ ΔW 양측 95% CI 0배제 ∧ 국면 에피소드 각≥2. 전향 채택=등록 후 신규 블록 단측 95%>0, 실패=재판정 금지.
+§8 리스크: 회당 1%(0.5%=동일 코인 최근 3 대표실행 연속 45+ ∧ 최초 실거래 1회·자동·영구 소진). 오픈리스크 3%·명목 60%.
+§9 발효: manifest 4단(A/R/B/C) 외부 타임스탬프. [A]=release_id 선발급→기입→동결→SHA-256→외부 고정.
+   n394·후보생성자료·KAITO row-ID 목록+해시 포함 필수.
+§10 영구: 과거 🟢 재구성 금지·감점 소급 복원 금지·KAITO 1건 영구 제외(추가 승자 제외 금지)·
+   기존 통계="단일 하락 에피소드 기술통계" 강등·채점 변경=§7 절차로만.`,
+  changeLog:[]};
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+" · web·r26";
+$("#vtag").textContent=CONFIG.version+"a-rc9-2 · web·r27";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -294,32 +329,42 @@ async function daily(mk,cnt=CONFIG.ind.candleCount){ const d=await dailyRaw(mk,c
 const _candCache={};
 async function candDates(mk){ if(!_candCache[mk]){ const d=(await gj(`${UP}/candles/days?market=${mk}&count=200`)).reverse();
   _candCache[mk]=[d.map(c=>c.candle_date_time_utc.slice(0,10)),d.map(c=>c.high_price),d.map(c=>c.low_price),d.map(c=>c.trade_price),
-    d.map(c=>c.opening_price)]; }   // §0-5: 익일 '시가' 진입 측정용
+    d.map(c=>c.opening_price),d.map(c=>c.candle_acc_trade_volume)]; }   // 시가(익일 진입)·거래량(rc9-2 q 판정)
   return _candCache[mk]; }
 
-/* ═══ §0-2 / 1-2: β̂ = 신호일 '이전' 90일 일봉 수익률 OLS (신호일 미포함 → 룩어헤드 누수 차단) ═══ */
-function betaPre(cs,bIdx,btcC,ds,i0,win){
-  win=win||90;
-  if(i0<win) return null;                                   // 90일 미만 신규상장 → β미추정 버킷
+/* ═══ rc9-2 §3: β̂ = 앵커일 T '이전' 91개 마크가격 P_{T−91}…P_{T−1} → 90개 일수익률 OLS(절편 포함)
+   T 당일 미포함(rc5 산술 정정). β유효 = 91가격 존재·유한·양수 AND BTC 수익률 분산>0.
+   ※ 구현 한계(보고됨): 캘린더 격자+이월 마크 대신 거래일 격자 사용 — 업비트 KRW는 365일 거래라
+     무거래일이 희소해 실질 등가. 무거래일 다수 발생 자산에선 차이 가능. ═══ */
+function betaPre(cs,bIdx,btcC,ds,i0){
+  const win=91;
+  if(i0<win) return null;                                   // 91가격 미확보(신규상장) → β미추정 버킷
   const rc=[],rb=[];
-  for(let k=i0-win+1;k<=i0;k++){                            // i0 이하(신호일 종가까지의 과거 수익률)만 사용
+  for(let k=i0-win+1;k<=i0-1;k++){                          // P_{T−91}..P_{T−1} → 수익률은 k-1→k (T 당일 미포함)
     const b1=bIdx[ds[k]], b0=bIdx[ds[k-1]];
-    if(b1==null||b0==null||!cs[k-1]||!btcC[b0]) continue;
-    rc.push(cs[k]/cs[k-1]-1); rb.push(btcC[b1]/btcC[b0]-1); }
-  if(rb.length<60) return null;                             // 매칭 봉 부족
+    if(b1==null||b0==null) return null;                     // 대응 BTC 가격 부재 → β 무효(rc9-2: 91가격 '모두' 존재)
+    const pc0=cs[k-1],pc1=cs[k],pb0=btcC[b0],pb1=btcC[b1];
+    if(!(pc0>0&&pc1>0&&pb0>0&&pb1>0&&isFinite(pc0)&&isFinite(pc1)&&isFinite(pb0)&&isFinite(pb1))) return null;
+    rc.push(pc1/pc0-1); rb.push(pb1/pb0-1); }
+  if(rb.length<90) return null;
   const mb=rb.reduce((x,y)=>x+y,0)/rb.length, mc=rc.reduce((x,y)=>x+y,0)/rc.length;
   let cov=0,varB=0;
   for(let k=0;k<rb.length;k++){ cov+=(rc[k]-mc)*(rb[k]-mb); varB+=(rb[k]-mb)*(rb[k]-mb); }
-  return varB>0? cov/varB : null;
+  return varB>0? cov/varB : null;                           // 절편 포함 단순회귀 기울기 ≡ cov/var
 }
+// rc9-2 §1: 이력 연결 키 — market_instance_id. lifecycle 테이블 원천 부재(업비트 공개 API 미제공)로
+// "최초 관측 캔들 날짜" 근사 사용. 재상장·스왑 구분 불가 한계는 보고됨(정본 lifecycle 확보 시 교체).
+function mkInstanceId(mk){ const c=_candCache[mk]; return mk+"@"+((c&&c[0]&&c[0][0])||"unknown"); }
 
-/* ═══ §0-1 / 1-1: 클러스터 태깅 — episode_id · dateblock_id · regime_episode_id (소급) ═══ */
+/* ═══ rc9-2 §1·§2 / 1-1: 클러스터 태깅 — episode_id · dateblock_id · regime_episode_id (소급)
+   블록 앵커 = 2026-07-01 09:00 KST(=00:00 UTC) 고정, 21일 반개구간 [start,end).
+   에피소드 = end*(D0+10) 창 겹침의 추이적 폐포(간격≤10일 연쇄와 등가). 대표 = signal_time 최소. ═══ */
+const PROTO_ANCHOR_UTC=Date.UTC(2026,6,1,0,0,0);   // 2026-07-01 09:00 KST
 function tagClusters(log){
   const real=log.filter(e=>e&&!e.synthetic&&e.date&&e.symbol).sort((a,b)=> a.date<b.date? -1:(a.date>b.date?1:0));
   if(!real.length) return {episodes:0,blocks:0};
-  // 날짜블록: 최초 예측일부터 21일 비중첩 구간
-  const d0=new Date(real[0].date+"T00:00:00Z").getTime();
-  for(const e of real) e.dateblock_id="b"+Math.floor((new Date(e.date+"T00:00:00Z").getTime()-d0)/(21*86400000));
+  for(const e of real){ e.market_instance_id=e.market_instance_id||mkInstanceId(e.market||("KRW-"+e.symbol));
+    e.dateblock_id="b"+Math.floor((new Date(e.date+"T00:00:00Z").getTime()-PROTO_ANCHOR_UTC)/(21*86400000)); }
   // 에피소드: 코인별 연속 예측 중 10일 보유창 겹침(간격≤10일)이면 동일 에피소드
   const bySym={}; for(const e of real) (bySym[e.symbol]=bySym[e.symbol]||[]).push(e);
   let epTotal=0;
@@ -837,6 +882,40 @@ async function backfillLog(log){
           } else e.low_filled=false;                       // 미터치 또는 다음 거래일이 창 밖 = 미체결
           e.low_fill_checked=true; e.low_fill_v2=true;
         }
+        /* ═══ rc9-2 §4: 플랜 생명주기 — 발행+7일 창에서 τ→q 판정 (완성 캔들만, 발행봉 τ 금지) ═══ */
+        if(e.plan_entry_low!=null&&e.rc92_plan!==true){
+          const endP=new Date(new Date(e.date+"T00:00:00Z").getTime()+7*86400000).toISOString().slice(0,10);
+          if(endP<=todayStr){                                 // 유효기간 종료분만 확정 판정
+            const vs=(_candCache[e.market]||[])[5]||[];       // 거래량
+            const os2=(_candCache[e.market]||[])[4]||[];
+            const L=e.plan_entry_low;
+            let tauI=null;
+            for(let x=i0+1;x<ds.length&&ds[x]<endP;x++){ if(ls[x]<=L){ tauI=x; break; } }   // τ: 발행봉 제외(RC8-02)
+            let qI=null;
+            if(tauI!=null){ for(let x=tauI+1;x<=tauI+3&&x<ds.length&&ds[x]<endP;x++){
+              if(os2[x]!=null&&cs[x]>os2[x]&&cs[x]>L&&vs[x]>vs[tauI]){ qI=x; break; } } }   // q: 양봉∧종가>L∧량(q)>량(τ)
+            e.tau_date= tauI!=null? ds[tauI] : null;
+            e.q_date= qI!=null? ds[qI] : null;
+            e.c_event_shadow=(qI!=null);
+            e.a0=(e.score!=null? e.score>=60 : null);          // A0 = 발행 시점 score_final≥60
+            // B0/Bq: KRW-BTC 완성봉 종가 > BTC_MA50(당일 포함 50봉 SMA) 연속 2일 (RC8-01)
+            const bcl=btc[3]; const bB=(bi)=>{ if(bi==null||bi<50) return null;
+              let s1=0,s2=0; for(let k=bi-49;k<=bi;k++) s1+=bcl[k]; for(let k=bi-50;k<=bi-1;k++) s2+=bcl[k];
+              return bcl[bi]>s1/50 && bcl[bi-1]>s2/50; };
+            e.b0=bB(bIdx[ds[i0]]);
+            e.bq= qI!=null? bB(bIdx[ds[qI]]) : null;
+            // Aq: q 시점 점수 = 그 날짜의 동일 심볼 예측 행에서만 확보 가능(재계산 불가 — 한계 보고됨)
+            e.aq=null;
+            if(qI!=null){ const qRow=log.find(x=>x.symbol===e.symbol&&x.date===ds[qI]&&x.score!=null);
+              if(qRow) e.aq=qRow.score>=60; }
+            e.eligible=(e.aq===true&&e.bq===true&&e.c_event_shadow===true)? true : ((e.aq===false||e.bq===false||!e.c_event_shadow)? false : null);
+            // 이론 진입: 실행창 [q, q+2일) 첫 생성 캔들 시가
+            if(qI!=null){ const endQ=new Date(new Date(ds[qI]+"T00:00:00Z").getTime()+2*86400000).toISOString().slice(0,10);
+              for(let x=qI+1;x<ds.length&&ds[x]<endQ;x++){ if(os2[x]!=null){ e.t_entry_date=ds[x]; e.p_entry=os2[x]; break; } }
+              if(e.t_entry_date==null) e.no_fill_reason="no_candle"; }
+            e.rc92_plan=true;
+          }
+        }
         // §0-6: 전향 스탑 비교(프로토콜 확정일 이후 예측만) — 고정-5% vs 1×ATR vs k0.5 vs 0.75
         //   비용(수수료 0.1%+티어 슬리피지)·갭 시가 체결·보유기간 일치 차감 적용. 기존 n394와 분리.
         if(e.date>=PROTOCOL.fixedDate&&e.simF==null&&e.atr_at_pred==null){
@@ -1161,7 +1240,20 @@ function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). �
   const seenEp=new Set(); const epRows=[];
   for(const e of rAll.slice().sort((a,b)=>a.date<b.date?-1:1)){ const id=e.episode_id||e.symbol+"-x";
     if(seenEp.has(id)) continue; seenEp.add(id); epRows.push(e); }
-  const neff=nEffBootstrap(rAll,"win_resid_10d",1000);
+  const neff=nEffBootstrap(rAll,"win_resid_10d",1000);   // (구 체계 — 커버 선언으로 폐기, 참고 계산만 잔존)
+  /* ═══ rc9-2 §2: m_* 체계 (n_eff 대체) — 에피소드 대표 기준 블록 카운트 ═══ */
+  const blockSet=(arr)=>new Set(arr.map(e=>e.dateblock_id).filter(Boolean));
+  const m_time=blockSet(epRows).size;
+  const testRep=epRows.filter(e=>e.score>=60), ctrlRep=epRows.filter(e=>e.score<45);
+  const m_test=blockSet(testRep).size, m_control=blockSet(ctrlRep).size;
+  let m_both=0; for(const b of blockSet(epRows)){ if(testRep.some(e=>e.dateblock_id===b)&&ctrlRep.some(e=>e.dateblock_id===b)) m_both++; }
+  /* rc9-2 §4·§5: 플랜 생명주기·표본 계층 카운트 */
+  const pl92=v6All.filter(e=>e.rc92_plan===true);
+  const rc92={plan:pl92.length, tau:pl92.filter(e=>e.tau_date).length, C:pl92.filter(e=>e.c_event_shadow===true).length,
+    a0:pl92.filter(e=>e.a0===true).length, b0:pl92.filter(e=>e.b0===true).length, b0NA:pl92.filter(e=>e.b0==null).length,
+    eligible:pl92.filter(e=>e.eligible===true).length, aqUnknown:pl92.filter(e=>e.c_event_shadow===true&&e.aq==null).length,
+    noCandle:pl92.filter(e=>e.no_fill_reason==="no_candle").length,
+    entered:pl92.filter(e=>e.p_entry!=null).length};
   // 0-4 개정 게이트: 상위(60+) vs 하위(45미만) — 잔차 승률 격차 95% CI
   const gTop6=rAll.filter(e=>e.score>=60), gBot6=rAll.filter(e=>e.score<45);
   const epCount=(arr)=>new Set(arr.map(e=>e.dateblock_id)).size;
@@ -1169,9 +1261,11 @@ function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). �
   const ci=(gTop6.length&&gBot6.length)? gapCI(gTop6,gBot6,"win_resid_10d",1000) : null;
   const gate6={indep:epCount(rAll), nEff:neff.nEff,
     rgOn:(rgEp.on?rgEp.on.size:0), rgMid:(rgEp.mid?rgEp.mid.size:0), rgOff:(rgEp.off?rgEp.off.size:0), ci};
-  gate6.ok= gate6.indep>=3 && gate6.nEff>=10 && !!(ci&&ci.excludesZero) && gate6.rgOn>=2 && (gate6.rgMid+gate6.rgOff)>=2;
-  gate6.reason= gate6.ok? `✅ 개정 게이트 통과`
-    : `🚧 개정 게이트 보류 — 독립블록 ${gate6.indep}/3 · n_eff ${gate6.nEff}/10 · CI ${ci?`[${ci.lo.toFixed(1)},${ci.hi.toFixed(1)}]%p${ci.excludesZero?"(0배제)":"(0포함)"}`:"미산출"} · 국면Ep 🟢${gate6.rgOn}/🟡${gate6.rgMid}/🔴${gate6.rgOff}(각2)`;
+  // rc9-2 §7 튜닝 게이트: m_both≥10 AND ΔW 양측 95% CI 0배제 AND 국면 에피소드 각≥2 (n_eff 폐기)
+  gate6.mTime=m_time; gate6.mTest=m_test; gate6.mControl=m_control; gate6.mBoth=m_both;
+  gate6.ok= m_both>=10 && !!(ci&&ci.excludesZero) && gate6.rgOn>=2 && gate6.rgMid>=2 && gate6.rgOff>=2;
+  gate6.reason= gate6.ok? `✅ rc9-2 튜닝 게이트 통과`
+    : `🚧 rc9-2 게이트 보류 — m_both ${m_both}/10 (m_time ${m_time}·test ${m_test}·control ${m_control}) · ΔW CI ${ci?`[${ci.lo.toFixed(1)},${ci.hi.toFixed(1)}]%p${ci.excludesZero?"(0배제)":"(0포함)"}`:"미산출"} · 국면Ep 🟢${gate6.rgOn}/🟡${gate6.rgMid}/🔴${gate6.rgOff}(각2)`;
   // 1-2: 등급별 평균 β (고득점군 고β 여부)
   const betaByGrade=GRADES.map(([label,lo,hi])=>{ const a=v6All.filter(e=>e.beta_pre!=null&&e.score>=lo&&e.score<hi);
     return {label,n:a.length, beta:a.length? a.reduce((x,e)=>x+e.beta_pre,0)/a.length : null}; });
@@ -1221,7 +1315,7 @@ function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). �
     verdictHold, holdReason, ssSim, volBuckets, volBucketN, quietEx, scenario, prBucket, intradayBk,
     v6:{nRow:rAll.length, nEp:epRows.length, nEff:neff.nEff, blocks:neff.blocks, noBeta:rNoBeta.length,
       gate6, betaByGrade, residGrades, combos, pCgivenAB, nAB:ab.length, pathStrata, atrMult,
-      bands, edge, scoreDist, simFCmp, simFVerdict},
+      bands, edge, scoreDist, simFCmp, simFVerdict, rc92, mTime:m_time, mTest:m_test, mControl:m_control, mBoth:m_both},
     provisional:useProv, nConfirmed:cAll.length, nProv:pAll.length, avgDays, horizonCmp,
     basis: useProv? `잠정(진행중 · 평균 ${avgDays!=null?avgDays.toFixed(1):"-"}일 보유)` : chosen.label};
 }
@@ -1438,10 +1532,12 @@ function measureReport(ps){
   /* ═══ v10.6 프로토콜 집계 (1차 판정지표 = 10일 β보정 잔차 승률) ═══ */
   const V=ps.v6||{};
   const r1=(v,d)=> v==null?"-":((v>=0?"+":"")+v.toFixed(d==null?1:d));
-  h+=`<div class="line" style="margin-top:14px;color:#ffd257"><b>📜 프로토콜 v10.6 집계</b> <span style="color:#7b839a">(1차=10일 β잔차 승률 · KAITO는 가설생성 사례로 검증 제외)</span></div>`;
-  h+=`<div class="meta">표본 4종 병기: <b>n(행) ${V.nRow||0} · n(에피소드) ${V.nEp||0} · n_eff ${V.nEff||0} · 독립블록 ${V.blocks||0}</b> · β미추정 ${V.noBeta||0}건(잔차 제외·원수익 포함)<br>
+  h+=`<div class="line" style="margin-top:14px;color:#ffd257"><b>📜 프로토콜 ${PROTOCOL.version} 집계</b> <span style="color:#7b839a">(정본=${PROTOCOL.canonicalFile} · 1차=10일 β잔차 승률 · KAITO 영구 제외 · 발효 전=참고용)</span></div>`;
+  h+=`<div class="meta">표본: <b>n(행) ${V.nRow||0} · n(에피소드) ${V.nEp||0} · m_time ${V.mTime||0} · m_test ${V.mTest||0} · m_control ${V.mControl||0} · m_both ${V.mBoth||0}</b> · β미추정 ${V.noBeta||0}건(잔차 제외·원수익 포함) <span style="color:#7b839a">(n_eff 폐기 — m_* 체계)</span><br>
     ※ 기존 제외군·급등제외 통계는 <b>"단일 하락 에피소드의 기술통계, 일반화 미확인"</b></div>`;
-  h+=`<div class="meta"><b>개정 튜닝 게이트(0-4):</b> ${V.gate6?V.gate6.reason:"-"}</div>`;
+  h+=`<div class="meta"><b>rc9-2 §7 튜닝 게이트:</b> ${V.gate6?V.gate6.reason:"-"}</div>`;
+  const R9=V.rc92||{};
+  h+=`<div class="meta"><b>rc9-2 §4 플랜 생명주기</b>(발행+7일 확정분): 판정 ${R9.plan||0} · τ ${R9.tau||0} · <b>C_event_shadow ${R9.C||0}</b> · A0 ${R9.a0||0} · B0 ${R9.b0||0}(NA ${R9.b0NA||0}) · eligible ${R9.eligible||0}(Aq미상 ${R9.aqUnknown||0}) · 이론진입 ${R9.entered||0} · no_candle ${R9.noCandle||0}</div>`;
   if(V.residGrades&&V.residGrades.some(g=>g.n)){
     h+=`<table><tr><th>등급</th><th>n행</th><th>잔차승률</th><th>잔차평균</th><th>nEp</th><th>Ep승률</th><th>평균β</th></tr>`;
     for(let i=0;i<V.residGrades.length;i++){ const g=V.residGrades[i], b=V.betaByGrade[i];
@@ -1457,7 +1553,7 @@ function measureReport(ps){
     for(const b of V.bands) h+=`<tr><td>${b.band}</td><td>${b.n}</td><td>${b.win.toFixed(0)}%</td><td>${r1(b.mean)}%p</td></tr>`;
     h+=`</table><div class="meta">경계: 55~59 ${V.edge.b5559.n?`승${V.edge.b5559.win.toFixed(0)}%(n${V.edge.b5559.n})`:"n0"} vs 60~64 ${V.edge.b6064.n?`승${V.edge.b6064.win.toFixed(0)}%(n${V.edge.b6064.n})`:"n0"} · 70~74 ${V.edge.b7074.n?"n"+V.edge.b7074.n:"n0"} vs 75+ ${V.edge.b75.n?"n"+V.edge.b75.n:"n0"} · 순점수 p95=${V.scoreDist.p95!=null?V.scoreDist.p95:"-"} p99=${V.scoreDist.p99!=null?V.scoreDist.p99:"-"} max=${V.scoreDist.max!=null?V.scoreDist.max:"-"}</div>`;
   } else h+=`<div class="meta">1-7 서열성: 표본 부족(잔차 산출분 없음)</div>`;
-  h+=`<div class="line" style="margin-top:10px"><b>0-6 전향 스탑 비교</b> <span style="color:#7b839a">(확정일 이후 표본만 · 비용·갭·보유기간 일치 적용 · 승률 단독 채택 금지)</span></div>`;
+  h+=`<div class="line" style="margin-top:10px"><b>[참고] 전향 스탑 비교(구 §0 기준)</b> <span style="color:#ff8ba0">⚠️ rc9-2 §6 정본 아님</span> <span style="color:#7b839a">— rc9-2 §6(τ→q→진입·21일 보유·42일 블록·98.333% 하한)은 eligible 전향 표본 축적 대기 중(현재 stop_pair 0)</span></div>`;
   h+=`<table><tr><th>스탑</th><th>n</th><th>승률</th><th>평균잔차</th><th>CVaR5%</th></tr>`;
   for(const s of (V.simFCmp||[])) h+=`<tr><td>${{fixed5:"고정 -5%",atr1:"1×ATR",k05:"0.5×ATR",k075:"0.75×ATR"}[s.key]}</td><td>${s.n||0}</td><td>${s.n?s.win.toFixed(0)+"%":"-"}</td><td>${s.n?r1(s.mean)+"%p":"-"}</td><td>${s.n&&s.cvar5!=null?r1(s.cvar5)+"%":"-"}</td></tr>`;
   h+=`</table><div class="meta">${V.simFVerdict||"-"} <span style="color:#7b839a">· 기존 k시뮬(n394)은 "탐색 표본" — 검증 재사용 금지</span></div>`;
@@ -1820,7 +1916,8 @@ function render(res,log,nEval){
     const V6=psum.v6||{};
     const comboTxt=Object.keys(V6.combos||{}).length? Object.entries(V6.combos).sort().map(([k,v])=>`${k}:${v}`).join(" "):"-";
     diagBlock=`[진단] 측정기준: 알파 · ${psum.basis} · n${psum.mN}\n`
-      +` 프로토콜v10.6: n행${V6.nRow||0}/nEp${V6.nEp||0}/n_eff${V6.nEff||0}/독립블록${V6.blocks||0} · 개정게이트: ${(V6.gate6&&V6.gate6.reason||"-").replace(/<[^>]*>/g,"")}\n`
+      +` 프로토콜${PROTOCOL.version}: n행${V6.nRow||0}/nEp${V6.nEp||0}/m_time${V6.mTime||0}/m_both${V6.mBoth||0} · 게이트: ${(V6.gate6&&V6.gate6.reason||"-").replace(/<[^>]*>/g,"")}\n`
+      +` rc92플랜: 판정${(V6.rc92&&V6.rc92.plan)||0}·C_shadow${(V6.rc92&&V6.rc92.C)||0}·eligible${(V6.rc92&&V6.rc92.eligible)||0}·진입${(V6.rc92&&V6.rc92.entered)||0}\n`
       +` 삼중게이트(A=60+,B=BTC>MA50 2일,C=하단터치+량): ${comboTxt} · P(C|A,B)=${V6.pCgivenAB!=null?V6.pCgivenAB.toFixed(0)+"%":"-"}(n${V6.nAB||0})\n`
       +` 팩터(충족α / 미달α / 격차):\n${fLines||"   (표본 부족)"}\n`
       +` 국면커버리지: ${covLine}\n`
@@ -1892,6 +1989,9 @@ function render(res,log,nEval){
       <button id="delBtn" class="btn2">🗑️ 오염 제거</button>
       <button id="undoBtn" class="btn2">↩️ 되돌리기</button>
     </div>
+    <div class="row" style="margin-top:8px">
+      <button id="mfBtn" class="btn2">📦 Manifest [A] 생성 (rc9-2 §9)</button>
+    </div>
     <div id="scanOut" class="disc" style="margin-top:8px;line-height:1.6"></div></div>`;
 
   h+=`<details><summary>📖 용어 설명 (처음이면 펼쳐보세요)</summary>
@@ -1961,6 +2061,39 @@ function render(res,log,nEval){
     if(!snap||!Array.isArray(snap.log)){ alert("복원할 스냅샷이 없습니다."); return; }
     if(!confirm(`스냅샷(${snap.at.slice(0,19).replace("T"," ")})으로 되돌립니다.\n현재 ${loadLog().length}건 → ${snap.log.length}건\n\n진행할까요?`)) return;
     saveLog(snap.log); alert(`복원 완료: ${snap.log.length}건. [실행]을 눌러 반영하세요.`);
+  };
+  // rc9-2 §9 [A]: protocol_release_manifest — release_id 발급 + row-ID 3종 + SHA-256 → 파일 다운로드
+  //   외부 고정 = 이 파일들을 GitHub 저장소에 커밋(공개 불변 이력). Git 서명 태그는 사용자 선택.
+  $("#mfBtn").onclick=async()=>{
+    const sha=async(txt)=>{ const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(txt));
+      return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join(""); };
+    const lg=loadLog();
+    const rowId=(e)=>`${e.date}|${e.symbol}|${e.cfgVersion||"legacy"}`;
+    const n394=lg.filter(e=>isLegacyRec(e)).map(rowId);                                   // 탐색 표본
+    const candGen=lg.filter(e=>!isLegacyRec(e)&&/^v10\.[0-2]/.test(e.cfgVersion||"")).map(rowId);  // 후보 생성 자료
+    const kaito=lg.filter(e=>e.symbol==="KAITO").map(rowId);                              // KAITO 영구 제외
+    const lists={n394_exploratory:n394, candidate_generation:candGen, kaito_excluded:kaito};
+    const listTxt=JSON.stringify(lists,null,1);
+    const listSha=await sha(listTxt);
+    const relId="REL-"+PROTOCOL.version+"-"+Date.now().toString(36);
+    PROTOCOL.releaseId=relId;
+    const mf={type:"protocol_release_manifest", release_id:relId,
+      protocol:{version:PROTOCOL.version, canonical_file:PROTOCOL.canonicalFile,
+        summary_sha256:await sha(PROTOCOL.text)},
+      code:{app:"upbit-swing-screener.html", build:document.querySelector("#vtag").textContent,
+        config_sha256:await sha(JSON.stringify(CONFIG))},
+      row_id_lists:{file:"rowid_lists_"+relId+".json", sha256:listSha,
+        counts:{n394:n394.length, candidate_gen:candGen.length, kaito:kaito.length}},
+      external_fix:"GitHub 저장소 커밋으로 외부 불변 고정(권장: 서명 태그). 커밋 URL을 여기 기록",
+      created_at_kst:new Date(Date.now()+9*3600*1000).toISOString().replace("Z","+09:00")};
+    const mfTxt=JSON.stringify(mf,null,1);
+    const mfSha=await sha(mfTxt);
+    const dl=(name,txt)=>{ const b2=new Blob([txt],{type:"application/json"}); const u=URL.createObjectURL(b2);
+      const a2=document.createElement("a"); a2.href=u; a2.download=name; document.body.appendChild(a2); a2.click(); a2.remove();
+      setTimeout(()=>URL.revokeObjectURL(u),1000); };
+    dl("rowid_lists_"+relId+".json",listTxt);
+    dl("protocol_release_manifest_"+relId+".json",mfTxt+"\n// manifest_sha256="+mfSha);
+    alert(`Manifest [A] 생성 완료\nrelease_id: ${relId}\nrow-ID: n394 ${n394.length} · 후보생성 ${candGen.length} · KAITO ${kaito.length}\nmanifest SHA-256: ${mfSha.slice(0,16)}…\n\n두 파일을 GitHub 저장소에 커밋하면 외부 고정 완료(발효).`);
   };
   $("#impBtn").onclick=()=>$("#impFile").click();
   $("#impFile").onchange=(e)=>{ const f=e.target.files[0]; if(!f) return;
