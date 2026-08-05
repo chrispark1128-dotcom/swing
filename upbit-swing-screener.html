@@ -246,7 +246,7 @@ const PROTOCOL={version:"v10.6a-rc9-2", fixedDate:"2026-08-05", canonicalFile:"�
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+"a-rc9-2 · web·r27";
+$("#vtag").textContent=CONFIG.version+"a-rc9-2 · web·r28";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -2088,12 +2088,15 @@ function render(res,log,nEval){
       created_at_kst:new Date(Date.now()+9*3600*1000).toISOString().replace("Z","+09:00")};
     const mfTxt=JSON.stringify(mf,null,1);
     const mfSha=await sha(mfTxt);
+    // 모바일 브라우저가 연속 다운로드를 차단하므로 단일 번들 파일로 배포.
+    // 검증법: bundle.rowid_lists를 JSON.stringify(...,null,1)로 직렬화해 SHA-256 → manifest.row_id_lists.sha256과 일치해야 함
+    const bundle={_type:"protocol_release_bundle", _verify:"sha256(JSON.stringify(rowid_lists,null,1)) == manifest.row_id_lists.sha256",
+      manifest:mf, manifest_sha256:mfSha, rowid_lists:lists};
     const dl=(name,txt)=>{ const b2=new Blob([txt],{type:"application/json"}); const u=URL.createObjectURL(b2);
       const a2=document.createElement("a"); a2.href=u; a2.download=name; document.body.appendChild(a2); a2.click(); a2.remove();
       setTimeout(()=>URL.revokeObjectURL(u),1000); };
-    dl("rowid_lists_"+relId+".json",listTxt);
-    dl("protocol_release_manifest_"+relId+".json",mfTxt+"\n// manifest_sha256="+mfSha);
-    alert(`Manifest [A] 생성 완료\nrelease_id: ${relId}\nrow-ID: n394 ${n394.length} · 후보생성 ${candGen.length} · KAITO ${kaito.length}\nmanifest SHA-256: ${mfSha.slice(0,16)}…\n\n두 파일을 GitHub 저장소에 커밋하면 외부 고정 완료(발효).`);
+    dl("protocol_release_manifest_"+relId+".json",JSON.stringify(bundle,null,1));
+    alert(`Manifest [A] 생성 완료 (단일 번들 파일)\nrelease_id: ${relId}\nrow-ID: n394 ${n394.length} · 후보생성 ${candGen.length} · KAITO ${kaito.length}\nmanifest SHA-256: ${mfSha.slice(0,16)}…\n\n이 파일 1개를 GitHub 저장소에 커밋하면 외부 고정 완료(발효).`);
   };
   $("#impBtn").onclick=()=>$("#impFile").click();
   $("#impFile").onchange=(e)=>{ const f=e.target.files[0]; if(!f) return;
