@@ -242,11 +242,13 @@ const PROTOCOL={version:"v10.6a-rc9-2", fixedDate:"2026-08-05", canonicalFile:"�
    n394·후보생성자료·KAITO row-ID 목록+해시 포함 필수.
 §10 영구: 과거 🟢 재구성 금지·감점 소급 복원 금지·KAITO 1건 영구 제외(추가 승자 제외 금지)·
    기존 통계="단일 하락 에피소드 기술통계" 강등·채점 변경=§7 절차로만.`,
-  changeLog:[]};
+  changeLog:[
+    {date:"2026-08-22",reason:"v10.6.1 P0-1: 1차 지표 채택부가 '최장 확정 창 자동 승격'(v10.1 유래)으로 §3 위반(21일 채택) — 10일 고정창으로 교정. 측정식 정의 변경 아님(위반 교정). 코드 변경이므로 신규 release([A] 재생성·재커밋) 필요"},
+  ]};
 
 const $=(s)=>document.querySelector(s);
 const out=$("#out"), statusEl=$("#status"), pbar=$("#pbar"), runBtn=$("#run");
-$("#vtag").textContent=CONFIG.version+"a-rc9-2 · web·r28";
+$("#vtag").textContent=CONFIG.version+".1(rc9-2) · web·r29";
 function setStatus(t){statusEl.textContent=t}
 function setProg(f){pbar.style.width=Math.max(0,Math.min(1,f))*100+"%"}
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
@@ -1012,12 +1014,15 @@ function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). �
   /* ═══ v10.1 계측 집계 — 절단 해소(무스탑) + 베타 보정(알파). status 무관, 백필된 건 전부 ═══ */
   const M=CONFIG.measure;
   const scoped=log.filter(inScope);
-  // 측정 기준 자동 선택: 확정 표본이 minN 이상인 '가장 긴 창' 우선 (21d > 10d > 5d), 없으면 잠정(진행중)
+  // v10.6.1 P0-1: 1차 판정지표 = "10일 고정창" 고정 (프로토콜 §3 — 사후 창 갈아타기 금지).
+  //   (구) '최장 확정 창 자동 승격'은 21일 표본 10건 도달 시 21일로 전환돼 §3 위반이었음 — 교정.
+  //   10일 확정 표본이 전무한 초기 상태에만 잠정(진행중)으로 표기. 21일·5일·잠정은 [참고] 병기(삭제 금지).
   const BASES=[{key:"21d",af:"alpha_21d",rf:"ret_21d_nostop",wf:"win_vs_btc",label:`확정(${M.window}일)`,days:M.window}]
     .concat((M.fixedWindows||[]).slice().sort((a,b)=>b-a).map(N=>({key:N+"d",af:"alpha_"+N+"d",rf:"ret_"+N+"d",wf:"win_vs_btc_"+N+"d",label:`확정(${N}일 고정창)`,days:N})))
     .concat([{key:"todate",af:"alpha_todate",rf:"ret_todate_nostop",wf:"win_vs_btc_todate",label:"잠정(진행중)",days:null}]);
-  let chosen=BASES[BASES.length-1];
-  for(const b of BASES){ if(scoped.filter(e=>e[b.af]!=null).length>=CONFIG.gate.minN){ chosen=b; break; } }
+  const b10=BASES.find(b=>b.key==="10d");
+  const n10=scoped.filter(e=>e[b10.af]!=null).length;
+  let chosen= n10>0? b10 : BASES[BASES.length-1];   // 1차=10일 고정. 10일 표본 0건(수집 초기)에만 잠정 표기
   const AF=chosen.af, RF=chosen.rf, WF=chosen.wf;
   const useProv= chosen.key==="todate";
   const mAll=scoped.filter(e=>e[AF]!=null);
@@ -1317,7 +1322,7 @@ function perfSummary(log){   // 성과 통계 요약(화면·copytext 공용). �
       gate6, betaByGrade, residGrades, combos, pCgivenAB, nAB:ab.length, pathStrata, atrMult,
       bands, edge, scoreDist, simFCmp, simFVerdict, rc92, mTime:m_time, mTest:m_test, mControl:m_control, mBoth:m_both},
     provisional:useProv, nConfirmed:cAll.length, nProv:pAll.length, avgDays, horizonCmp,
-    basis: useProv? `잠정(진행중 · 평균 ${avgDays!=null?avgDays.toFixed(1):"-"}일 보유)` : chosen.label};
+    basis: useProv? `잠정(진행중 · 평균 ${avgDays!=null?avgDays.toFixed(1):"-"}일 보유)` : chosen.label+(chosen.key==="10d"?" · 프로토콜 1차":"")};
 }
 
 // 측정 전용 풀(레거시+v10, 채점규칙 무관·가격기반만). 허용: 스탑시뮬/질지표/변동성분포. 금지: 등급성과/게이트
@@ -1823,6 +1828,13 @@ function render(res,log,nEval){
   if(lowLiqRun) h+=`<div class="meta warn">⚠️ <b>거래 한산 시간대</b> — 전 후보 거래량 배수 중앙값 ${vrMedian!=null?vrMedian.toFixed(2):"-"}x &lt; ${CONFIG.measure.lowLiqMedianTh}x → 거래량 축 신뢰도 낮음 (이 실행 로그에 low_liquidity_run 태그됨)</div>`;
   h+=`<div class="meta">점수만 보면 됨: 🟢75+ 강한 진입 · 🟡60~74 조건부 · ⚪45~59 관망 · ⛔45미만 제외. 급등추격·거래량부재·저항코앞·주봉역추세 등 자동 감점.</div>`;
 
+  const psum=perfSummary(log);   // 성과 통계 — 카드 등급 병기(P1-1)와 copytext 공용 (1회 계산)
+  // P1-1: 등급 라벨 옆 실측 병기 — 알파·실현 반드시 병기(택일 금지) + n + 판정 상태
+  const gradeAnnot=(sc)=>{ const lab= sc>=75?"🟢75+":(sc>=60?"🟡60~74":(sc>=45?"⚪45~59":"⛔<45"));
+    const m=(psum.mGrades||[]).find(g=>g.label===lab), g0=(psum.grades||[]).find(g=>g.label===lab);
+    if(!m||!m.n) return "";
+    const pa=(v)=> v==null?"-":((v>=0?"+":"")+v.toFixed(1)+"%");
+    return ` <span style="font-size:11px;font-weight:500;color:#9aa3ba">(α${pa(m.alpha)} / 실현${(g0&&g0.n)?pa(g0.avgpct):"-"} · n${m.n}${psum.verdictHold?" · 🚧판정보류":""})</span>`; };
   if(!rows.length) h+=`<div class="card">통과 후보 없음.</div>`;
   rows.forEach(([sc,bd,a,pl,u,tr,tn],idx)=>{
     const mm=(a.macd!=null&&a.sig!=null&&a.macd>a.sig)?"▲골든(단기 상승신호)":"▽데드(단기 하락신호)";
@@ -1836,7 +1848,7 @@ function render(res,log,nEval){
                   :(u.caution?`⚠️ 업비트 ${cReason} 주의 — 급변동 위험 — `:"");
     h+=`<div class="card">
       <h3><span class="sym">${idx+1}. ${esc(u.symbol)}</span> <span class="kname">${esc(u.name||"")}</span>
-        <span class="sc ${gcls(sc)}">${sc} ${verdict(sc)}</span>${wbadge}</h3>
+        <span class="sc ${gcls(sc)}">${sc} ${verdict(sc)}</span>${gradeAnnot(sc)}${wbadge}</h3>
       <div class="easy">💬 ${esc(warnLead)}${esc(plainSummary(sc,bd,a,pl))}</div>`;
     if(a.rsi!=null){
       h+=`<div class="line">${tr} ${tn} · 추세${bd["추세"]}/모멘텀${bd["모멘텀"]}/거래량${bd["거래량"]}/셋업${bd["셋업"]}/상대강도${bd["상대강도"]}${pentxt}</div>
@@ -1865,8 +1877,7 @@ function render(res,log,nEval){
   const detail=rows.map(x=>{ const a=x[2];
     const wk=(a.w10&&a.p>=a.w10)?"주봉↑":"주봉↓";
     return `${x[4].symbol}${x[4].warn?"🚨":""}(${x[0]}${svW(x[0])},7d${c7f(a)},30d${c30f(a)},${wk},거래${a.vr!=null?a.vr.toFixed(2)+"x":"-"})`; }).join(" · ");
-  const psum=perfSummary(log);   // 성과 통계(계산된 요약만, 원본 로그 미포함)
-  let perfBlock;
+  let perfBlock;   // psum은 카드 병기용으로 위에서 1회 계산됨
   if(!psum.hasData){ perfBlock=`[성과] 아직 평가 완료 없음·대기 ${psum.pend}건\n`; }
   else {
     const gStr=psum.grades.filter(g=>g.n).map(g=>`${g.label} n${g.n}·T1 ${g.t1pct.toFixed(0)}%·스탑 ${g.stoppct.toFixed(0)}%·평균 ${g.avgpct>=0?"+":""}${g.avgpct.toFixed(1)}%`).join(" / ")||"-";
